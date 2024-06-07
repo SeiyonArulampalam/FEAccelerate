@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from numba import cuda
 from pyinstrument import Profiler
 import time
 
@@ -37,257 +36,12 @@ Node (N)    0           1           2           3
 """
 
 
-def Order1ShapeFunc(xi):
-    """
-    Definition of the shape functions for a linear element
-
-    Parameters
-    ----------
-    xi : float
-        quadrature point in [0,1] frame
-
-    Returns
-    -------
-    arrays
-        f : the value of the shape functions at xi
-        df: derivative of shape functions at xi
-    """
-    # shape functions
-    f1 = 1 - xi
-    f2 = xi
-    f = np.array([f1, f2])
-
-    # shape function derivatives
-    df1 = -1
-    df2 = 1
-    df = np.array([df1, df2])
-
-    return f, df
-
-
-def Order1Map(xi, x_vec):
-    """
-    Map the local reference frame to the global reference fram
-
-    Parameters
-    ----------
-    xi : float
-        quadrature point of interest [0,1]
-    x_vec : array
-        first entry is the left node position,
-        and the second entry is the 2nd node of the element
-
-    Returns
-    -------
-    float
-        the mapped global coordinate of the quadrature point
-    """
-    x1 = x_vec[0]
-    x2 = x_vec[1]
-
-    f, _ = Order1ShapeFunc(xi)
-    N1 = f[0]
-    N2 = f[1]
-
-    return x1 * N1 + x2 * N2
-
-
-def Order1Jacobian(x_vec):
-    """
-    Compute the jacobian of the element
-
-    Parameters
-    ----------
-    x_vec : array
-        first entry is the left node position,
-        and the second entry is the 2nd node of the element
-
-    Returns
-    -------
-    float
-        Jacobian is the scaling factor for a change of frame for integration.
-        In our case we want to change our integration fram from the global coordiantes
-        to the [0,1] reference frame. The jacobian acts as a scaling term.
-
-    """
-    x1 = x_vec[0]
-    x2 = x_vec[1]
-    return x2 - x1
-
-
-def Order1_dNdx(xi, x_vec):
-    """
-    Compute the shape function derivatives w.r.t the global frame
-
-    Parameters
-    ----------
-    xi : float
-        quadrature point of interest [0,1]
-    x_vec : array
-        first entry is the left node position,
-        and the second entry is the 2nd node of the element
-
-
-    Returns
-    -------
-    array
-        First element is the derivative of the first shape function w.r.t. x.
-        Second element is the derivative of the second shape function w.r.t. x.
-    """
-    jac = Order1Jacobian(x_vec)
-
-    _, df = Order1ShapeFunc(xi)
-    dN1_dxi = df[0]
-    dN2_dxi = df[1]
-
-    dN1_dx = dN1_dxi / jac
-    dN2_dx = dN2_dxi / jac
-
-    dNdx = np.array([dN1_dx, dN2_dx])
-    return dNdx
-
-
-def GaussOrder4():
-    """
-    Define the Gaussian Quadrature points and weights exact up to order 4. The
-    weights are multiplied by 0.5 to shift the weights from wiki that are from the [-1,1] frame.
-    Similarly, the quadrature points are shifted as well.
-
-    var_hat -> [0,1] frame. While w and xi are in the [-1,1] frame
-    w_hat = 0.5*w
-    xi_hat = 0.5*xi + 0.5
-
-    Returns
-    -------
-    arrays
-        wts: quadrature weight in [0,1] frame
-        xi : quadrature pts in the [0,1] frame
-    """
-    # Weights and quad points shifted s.t. xi in [0,1] coordinates
-    wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
-    xi = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
-    return wts, xi
-
-
-def Integrate_K(
-    wts,
-    xi_pts,
-    jac_func,
-    shape_func_derivatives,
-    shape_func_vals,
-    x_vec,
-    a,
-    c0,
-    i,
-    j,
-):
-    """
-    Evaluate the integral that defines the elemental stiffness matrix input.
-
-    Parameters
-    ----------
-    wts : array
-        quadrature weights
-    xi_pts : array
-        quadrature points
-    jac_func : function
-        jacobian function handle
-    shape_func_derivatives : function
-        shape function derivatives handle that returns the derivative at quad point
-    shape_func_vals : function
-        shape function handle that returns the derivative at quad point
-    x_vec : array
-        first entry is the left node position,
-        and the second entry is the 2nd node of the element
-    a : float
-        elemental coeff
-    c0 : float
-        elemental coeff
-    i : int
-        index for the local stiffness matrix (row)
-    j : int
-        index for the local stiffness matrix (col)
-
-    Returns
-    -------
-    float
-        Gaussian quadrature integration result
-    """
-    I = 0.0
-    for k in range(len(wts)):
-        weight = wts[k]
-        xi = xi_pts[k]
-        jac = jac_func(x_vec)
-        dN_dx = shape_func_derivatives(xi, x_vec)
-        N, _ = shape_func_vals(xi)
-
-        comp1 = a * dN_dx[i] * dN_dx[j]
-        comp2 = c0 * N[i] * N[j]
-
-        I += weight * (comp1 + comp2) * jac
-
-    return I
-
-
-def Integrate_f(
-    wts,
-    xi_pts,
-    jac_func,
-    shape_func_vals,
-    x_vec,
-    g,
-    i,
-):
-    """
-    Evaluate the elemental f values to build the global F vector.
-
-    Parameters
-    ----------
-    wts : array
-        quadrature weights
-    xi_pts : array
-        quadrature points
-    jac_func : function
-        jacobian function handle
-    shape_func_vals : function
-        shape function handle that returns the derivative at quad point
-    x_vec : array
-        first entry is the left node position,
-        and the second entry is the 2nd node of the element
-    g : float
-        excitation value for the element
-    i : int
-        local node number
-
-    Returns
-    -------
-    float
-        Gaussian quadrature integration result
-    """
-    I = 0.0
-    for k in range(len(wts)):
-        weight = wts[k]
-        xi = xi_pts[k]
-        jac = jac_func(x_vec)
-        N, _ = shape_func_vals(xi)
-
-        comp1 = N[i] * g
-
-        I += weight * comp1 * jac
-
-    return I
-
-
-@cuda.jit
 def assemble_K_and_F(
     wts,
     xi_pts,
-    jac_func,
-    shape_func_derivatives,
-    shape_func_vals,
-    element_array,
-    element_node_tag_array,
     g,
+    element_node_tag_array,
+    element_array,
     K_global,
     F_global,
 ):
@@ -295,40 +49,62 @@ def assemble_K_and_F(
         # loop through each element and update the global matrix
         x_left = element_array[e][1]
         x_right = element_array[e][2]
-        x_vec = np.array([x_left, x_right])
+        jacobian = x_right - x_left
 
-        K_local = np.zeros((2, 2))
         for i in range(2):
             for j in range(2):
-                K_local[i, j] = Integrate_K(
-                    wts,
-                    xi_pts,
-                    jac_func,
-                    shape_func_derivatives,
-                    shape_func_vals,
-                    x_vec,
-                    a,
-                    c0,
-                    i,
-                    j,
-                )
+                # compute the local K matrix
+                I = 0.0
+                for k in range(len(wts)):
+                    # gauss points and weight
+                    weight = wts[k]
+                    xi = xi_pts[k]
+
+                    # shape func evaluate at gauss point
+                    N = [
+                        1 - xi,
+                        xi,
+                    ]
+
+                    # shape func derivative wrt global frame
+                    dN_dx = [
+                        -1 * (1.0 / jacobian),
+                        1 * (1.0 / jacobian),
+                    ]
+
+                    # integrand components
+                    comp1 = a * dN_dx[i] * dN_dx[j]
+                    comp2 = c0 * N[i] * N[j]
+
+                    # update integral approximation
+                    I += weight * (comp1 + comp2) * jacobian
+
                 n_i_e = element_node_tag_array[e][i + 1]
                 n_j_e = element_node_tag_array[e][j + 1]
-                K_global[int(n_i_e), int(n_j_e)] += K_local[i, j]
+                K_global[int(n_i_e), int(n_j_e)] += I
 
-        f_local = np.zeros(2)
         for i in range(2):
-            f_local[i] = Integrate_f(
-                wts,
-                xi_pts,
-                jac_func,
-                shape_func_vals,
-                x_vec,
-                g[e],
-                i,
-            )
+            # compute the local f vector
+            I = 0.0
+            for k in range(len(wts)):
+                # gauss points and weight
+                weight = wts[k]
+                xi = xi_pts[k]
+
+                # shape func evaluate at gauss point
+                N = [
+                    1 - xi,
+                    xi,
+                ]
+
+                # integrand component
+                comp1 = N[i] * g[e]
+
+                # update the integral approximation
+                I += weight * comp1 * jacobian
+
             n_i_e = element_node_tag_array[e][i + 1]
-            F_global[int(n_i_e)] += f_local[i]
+            F_global[int(n_i_e)] += I
 
     return K_global, F_global
 
@@ -337,7 +113,7 @@ def assemble_K_and_F(
 apply_convection = False  # apply forced convection at tip of beam
 
 # Establish the total number of elements and nodes and beam length
-num_elems = 50
+num_elems = 5
 num_nodes = num_elems + 1
 L = 0.05  # length of beam [m]
 D = 0.02  # diameter of rod [m]
@@ -360,6 +136,7 @@ c1 = rho * cp * A
 a = k * A
 c0 = P * beta
 
+"""Generate mesh and connectivity array"""
 # Generate the mesh
 xloc = np.linspace(0, L, num_nodes)  # location of x nodes
 
@@ -369,8 +146,8 @@ for i in range(num_nodes):
     node_array[i][0] = i
     node_array[i][1] = xloc[i]
 
-print("Mapping node tag -> node location:")
-print(node_array)
+# print("Mapping node tag -> node location:")
+# print(node_array)
 
 # Create element array: | element # | node 1 position | node 2 position |
 element_array = np.zeros((num_elems, 3))
@@ -379,9 +156,8 @@ for i in range(num_elems):
     element_array[i][1] = node_array[i][1]
     element_array[i][2] = node_array[i + 1][1]
 
-print("\nMapping element tag -> node position:")
-print(element_array)
-
+# print("\nMapping element tag -> node position:")
+# print(element_array)
 
 # Create element node tag array: | element # | node 1 tag | node 2 tag |
 element_node_tag_array = np.zeros((num_elems, 3))
@@ -390,74 +166,65 @@ for i in range(num_elems):
     element_node_tag_array[i][1] = int(node_array[i][0])
     element_node_tag_array[i][2] = int(node_array[i + 1][0])
 
-print("\nMapping element tag -> node tag:")
-print(element_node_tag_array)
+# print("\nMapping element tag -> node tag:")
+# print(element_node_tag_array)
 
-
-# Assemble K matrix, F vector, C Matrix
-# FEA: K*u + C*u_dot = F
+"""Compute K matrix anf F vector"""
+# Define the gauss quadrature points and weights
+# Weights and quad points shifted s.t. xi in [0,1] coordinates
+wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
+xi_pts = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
 
 # Excitation of the beam
 g = np.zeros(num_elems)  # initialize excitation vector
 
-# define key function handles for gaussian integration
-wts, xi_pts = GaussOrder4()
-jac_func = Order1Jacobian
-shape_func_derivatives = Order1_dNdx
-shape_func_vals = Order1ShapeFunc
-
-
-# call the cuda kernel
-start = time.perf_counter()
-
 # Initialize the vectors and matrixes for the finite element analysis
+# Create device-side copies of the arrays
 K_global = np.zeros((num_nodes, num_nodes))
 F_global = np.zeros(num_nodes)
 
+start = time.perf_counter()  # start timer
 K_global, F_global = assemble_K_and_F(
     wts,
     xi_pts,
-    jac_func,
-    shape_func_derivatives,
-    shape_func_vals,
-    element_array,
-    element_node_tag_array,
     g,
+    element_node_tag_array,
+    element_array,
     K_global,
     F_global,
 )
-
-end = time.perf_counter()
+end = time.perf_counter()  # end timer
 
 total_time = end - start
 print(f"\n Time to assemble K and F = {total_time:.6e} s\n")
 
+"""Apply BCs to model"""
 # Apply Dirichlet B.C.
 # modify K_global to be a pivot
 K_global[0, 0] = 1.0
 K_global[0, 1:] = 0.0  # zero the 1st row of the K matrix
 
-# modify the F_global due to dirichlet BC
+# Modify the F_global due to dirichlet BC
 F_global[0] = u_root
 F_global[1:] = F_global[1:] - K_global[1:, 0] * u_root
 
 # Zero the 1st col of the K matrix
 K_global[1:, 0] = 0.0
 
-# # Apply convection BC at beam tip
+# Apply convection BC at beam tip
 if apply_convection == True:
     K_global[-1, -1] += beta * A
 
-print("K matrix Modified:")
-print(K_global)
-print("\nF vector Modified:")
-print(F_global)
+# print("K matrix Modified:")
+# print(K_global)
+# print("\nF vector Modified:")
+# print(F_global)
 
-# Solve system fo Equations
+"""Solve system of Equations"""
 steady_state_soln = np.linalg.solve(K_global, F_global)
 
-print("\nSolution Steady State:")
-print(steady_state_soln)
+# print("\nSolution Steady State:")
+# print(steady_state_soln)
 
 
 # Plot Results
@@ -468,4 +235,4 @@ ax.set_ylabel("Temperature (C)")
 ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
 plt.grid()
 # plt.show()
-plt.savefig("steady.jpg", dpi=800)
+plt.savefig("soln_gpu.jpg", dpi=800)
