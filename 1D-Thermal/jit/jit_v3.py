@@ -1,15 +1,16 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-from numba import njit
+from numba import njit, prange
 from pyamg.aggregation import adaptive_sa_solver
 from pyamg.krylov import fgmres
+from concurrent.futures import ThreadPoolExecutor
 
 np.set_printoptions(precision=4)
 # plt.style.use("dark_background")
 
 """
-PDE: c1*∂u/∂t - ∂/∂x(a*∂u/∂x) + c0*u = g(x,t)
+PDE: - ∂/∂x(a*∂u/∂x) + c0*u = g(x,t)
 
 Insulated BC: k*A*∂u/∂t = 0 
 
@@ -17,7 +18,6 @@ Convection BC: k*A*∂u/∂t + β*A*u = 0
 
 Solution: u = T - T_ambient
 
-c1 = rho*cp*A
 a = k*A
 c0 = P*β
 
@@ -38,7 +38,7 @@ Node (N)    0           1           2           3
 """
 
 
-@njit
+# @njit
 def generate_mesh(L=1, num_nodes=2):
     # Generate the mesh
     xloc = np.linspace(0, L, num_nodes)  # location of x nodes
@@ -75,7 +75,7 @@ def generate_mesh(L=1, num_nodes=2):
     return element_array, element_node_tag_array
 
 
-@njit
+# @njit
 def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     # Apply Dirichlet B.C.
     # modify K_global to be a pivot
@@ -92,7 +92,7 @@ def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     return K_global, F_global
 
 
-@njit
+# @njit
 def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     # compute the local K matrix
     I = 0.0
@@ -123,7 +123,7 @@ def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     return I
 
 
-@njit
+# @njit
 def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     # gauss points and weight
     I = 0.0
@@ -146,7 +146,7 @@ def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     return I
 
 
-@njit
+# @njit
 def assemble_K_and_F(
     a,
     c0,
@@ -182,97 +182,99 @@ def assemble_K_and_F(
     return K_global, F_global
 
 
-# Flags
-apply_convection = False  # apply forced convection at tip of beam
+if __name__ == "__main__":
+    # Flags
+    apply_convection = False  # apply forced convection at tip of beam
 
-# Establish the total number of elements and nodes and beam length
-num_elems = 100_000
-num_nodes = num_elems + 1
-L = 0.05  # length of beam [m]
-D = 0.02  # diameter of rod [m]
+    # Establish the total number of elements and nodes and beam length
+    num_elems = 100_000
+    num_nodes = num_elems + 1
+    L = 0.05  # length of beam [m]
+    D = 0.02  # diameter of rod [m]
 
-# Define the physical coefficients of the simulation
-rho = 7700  # material density [kg/m3]
-beta = 100.0  # heat transfer coefficient [W/(m2.K)]
-k = 50.0  # thermal conductivity [W/(m.K)]
-A = np.pi * (D / 2) ** 2  # cross sectional area [m2]
-P = 2 * np.pi * (D / 2)  # perimeter [m]
-cp = 0.452  # specific heat at constant pressure [J/(kg.K)]
+    # Define the physical coefficients of the simulation
+    rho = 7700  # material density [kg/m3]
+    beta = 100.0  # heat transfer coefficient [W/(m2.K)]
+    k = 50.0  # thermal conductivity [W/(m.K)]
+    A = np.pi * (D / 2) ** 2  # cross sectional area [m2]
+    P = 2 * np.pi * (D / 2)  # perimeter [m]
+    cp = 0.452  # specific heat at constant pressure [J/(kg.K)]
 
-# Define the root temperature of the beam
-T_ambient = 20.0  # ambient temperature [C]
-T_root = 320.0  # temperature at the root [C]
-u_root = T_root - T_ambient  # temperature solution at the root [C]
+    # Define the root temperature of the beam
+    T_ambient = 20.0  # ambient temperature [C]
+    T_root = 320.0  # temperature at the root [C]
+    u_root = T_root - T_ambient  # temperature solution at the root [C]
 
-# Define coefficienct found in the heat unsteady 1d heat equation
-a = k * A
-c0 = P * beta
+    # Define coefficienct found in the heat unsteady 1d heat equation
+    a = k * A
+    c0 = P * beta
 
-start = time.perf_counter()  # start timer
-
-for i in range(6):
-    """Generate mesh and connectivity array"""
-    element_array, element_node_tag_array = generate_mesh(L=L, num_nodes=num_nodes)
-
-    """Compute K matrix anf F vector"""
     # Define the gauss quadrature points and weights
     # Weights and quad points shifted s.t. xi in [0,1] coordinates
     wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
     xi_pts = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
 
-    # Excitation of the beam
-    g = np.zeros(num_elems)  # initialize excitation vector
+    start = time.perf_counter()  # start timer
+    for i in range(6):
+        print(f"Iteration : {i}:")
+        """Generate mesh and connectivity array"""
+        element_array, element_node_tag_array = generate_mesh(L=L, num_nodes=num_nodes)
 
-    # Initialize the vectors and matrixes for the finite element analysis
-    # Create device-side copies of the arrays
-    K_global = np.zeros((num_nodes, num_nodes))
-    F_global = np.zeros(num_nodes)
+        """Compute K matrix anf F vector"""
+        # Excitation of the beam
+        g = np.zeros(num_elems)  # initialize excitation vector
 
-    # start = time.perf_counter()  # start timer
-    K_global, F_global = assemble_K_and_F(
-        a=a,
-        c0=c0,
-        wts=wts,
-        xi_pts=xi_pts,
-        g=g,
-        element_node_tag_array=element_node_tag_array,
-        element_array=element_array,
-        K_global=K_global,
-        F_global=F_global,
-    )
-    # end = time.perf_counter()  # end timer
-    # total_time = end - start
-    # print(f"\n Time to assemble K and F : {total_time:.6e} s")
-    # print(f" Total number of elements : {num_elems} \n")
+        # Initialize the vectors and matrixes for the finite element analysis
+        # Create device-side copies of the arrays
+        K_global = np.zeros((num_nodes, num_nodes))
+        F_global = np.zeros(num_nodes)
 
-    """Apply BCs to model"""
-    K_global, F_global = apply_dirichlet_BC(
-        K_global=K_global,
-        F_global=F_global,
-        u_root=u_root,
-    )
+        start = time.perf_counter()  # start timer
+        K_global, F_global = assemble_K_and_F(
+            a=a,
+            c0=c0,
+            wts=wts,
+            xi_pts=xi_pts,
+            g=g,
+            element_node_tag_array=element_node_tag_array,
+            element_array=element_array,
+            K_global=K_global,
+            F_global=F_global,
+        )
+        end = time.perf_counter()  # end timer
+        total_time = end - start
+        print(f"    Time to assemble K and F : {total_time:.6e} s")
 
-    # # Apply convection BC at beam tip
-    # if apply_convection == True:
-    #     K_global[-1, -1] += beta * A
+        """Apply BCs to model"""
+        K_global, F_global = apply_dirichlet_BC(
+            K_global=K_global,
+            F_global=F_global,
+            u_root=u_root,
+        )
 
-    # """Solve system of Equations using numpy"""
-    # # start = time.perf_counter()  # start timer
-    # steady_state_soln = np.linalg.solve(K_global, F_global)
-    # # end = time.perf_counter()  # end timer
-    # # total_time = end - start
-    # # print(f"\n Time to solve Kx = F : {total_time:.6e} s\n")
+        # Apply convection BC at beam tip
+        if apply_convection == True:
+            K_global[-1, -1] += beta * A
 
-end = time.perf_counter()  # end timer
-total_time = end - start
-print(f"\n Total Time : {total_time:.6e} s\n")
+        # """Solve system of Equations using numpy"""
+        # start = time.perf_counter()  # start timer
+        # steady_state_soln = np.linalg.solve(K_global, F_global)
+        # end = time.perf_counter()  # end timer
+        # total_time = end - start
+        # print(f"    Time to solve Kx = F : {total_time:.6e} s\n")
 
-# # Plot Results
-# fig, ax = plt.subplots(nrows=1, ncols=1)
-# ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
-# ax.set_xlabel("Location (m)")
-# ax.set_ylabel("Temperature (C)")
-# ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
-# plt.grid()
-# plt.show()
-# # plt.savefig("soln_jit.jpg", dpi=800)
+    end = time.perf_counter()  # end timer
+    total_time = end - start
+    print("\n-------------------------------------")
+    print(f"\n Total Time : {total_time:.6e} s\n")
+    print("-------------------------------------")
+
+    # # Plot Results
+    # fig, ax = plt.subplots(nrows=1, ncols=1)
+    # ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
+    # ax.set_xlabel("Location (m)")
+    # ax.set_ylabel("Temperature (C)")
+    # ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
+    # plt.grid()
+    # plt.show()
+    # # plt.savefig("soln_jit.jpg", dpi=800)
