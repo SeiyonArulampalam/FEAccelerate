@@ -48,9 +48,6 @@ def generate_mesh(L, num_nodes, num_elems):
         node_array[i][0] = i
         node_array[i][1] = xloc[i]
 
-    # print("Mapping node tag -> node location:")
-    # print(node_array)
-
     # Create element array: | element # | node 1 position | node 2 position |
     element_array = np.zeros((num_elems, 3))
     for i in range(num_elems):
@@ -58,18 +55,12 @@ def generate_mesh(L, num_nodes, num_elems):
         element_array[i][1] = node_array[i][1]
         element_array[i][2] = node_array[i + 1][1]
 
-    # print("\nMapping element tag -> node position:")
-    # print(element_array)
-
     # Create element node tag array: | element # | node 1 tag | node 2 tag |
     element_node_tag_array = np.zeros((num_elems, 3))
     for i in range(num_elems):
         element_node_tag_array[i][0] = int(i)
         element_node_tag_array[i][1] = int(node_array[i][0])
         element_node_tag_array[i][2] = int(node_array[i + 1][0])
-
-    # print("\nMapping element tag -> node tag:")
-    # print(element_node_tag_array)
 
     return element_array, element_node_tag_array
 
@@ -216,6 +207,7 @@ if __name__ == "__main__":
 
     K_list = []
     F_list = []
+    soln_list = []
     start = time.perf_counter()  # start timer
     for i in range(6):
         print(f"Iteration : {i}:")
@@ -275,12 +267,14 @@ if __name__ == "__main__":
         K_list.append(K_global)
         F_list.append(F_global)
 
-        # """Solve system of Equations using numpy"""
-        # start = time.perf_counter()  # start timer
+        """Solve system of Equations"""
+        # start_solve = time.perf_counter()  # start timer
         # steady_state_soln = np.linalg.solve(K_global, F_global)
-        # end = time.perf_counter()  # end timer
-        # total_time = end - start
-        # print(f"    Time to solve Kx = F : {total_time:.6e} s\n")
+        # end_solve = time.perf_counter()  # end timer
+        # total_time_solve = end_solve - start_solve
+        # print(f"    Time to solve Kx = F : {total_time_solve:.6e} s\n")
+        # soln_list.append(steady_state_soln)
+
     end = time.perf_counter()  # end timer
     total_time = end - start
     print("\n-------------------------------------")
@@ -288,7 +282,7 @@ if __name__ == "__main__":
     print(f"Total Elems : {num_elems}")
     print("-------------------------------------")
 
-    # # Plot Results
+    # Plot Results
     # fig, ax = plt.subplots(nrows=1, ncols=1)
     # ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
     # ax.set_xlabel("Location (m)")
@@ -296,4 +290,4 @@ if __name__ == "__main__":
     # ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
     # plt.grid()
     # plt.show()
-    # # plt.savefig("soln_jit.jpg", dpi=800)
+    # plt.savefig("soln_jit.jpg", dpi=800)
