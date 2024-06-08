@@ -93,7 +93,7 @@ def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
 
 
 @njit
-def compute_local_K(wts, xi_pts, jacobian, i, j):
+def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     # compute the local K matrix
     I = 0.0
     for k in range(len(wts)):
@@ -148,6 +148,8 @@ def compute_local_F(wts, xi_pts, jacobian, g_e, i):
 
 @njit
 def assemble_K_and_F(
+    a,
+    c0,
     wts,
     xi_pts,
     g,
@@ -165,7 +167,7 @@ def assemble_K_and_F(
         for i in range(2):
             for j in range(2):
                 # compute the local K matrix
-                I = compute_local_K(wts, xi_pts, jacobian, i, j)
+                I = compute_local_K(a, c0, wts, xi_pts, jacobian, i, j)
 
                 n_i_e = element_node_tag_array[e][i + 1]
                 n_j_e = element_node_tag_array[e][j + 1]
@@ -203,7 +205,6 @@ T_root = 320.0  # temperature at the root [C]
 u_root = T_root - T_ambient  # temperature solution at the root [C]
 
 # Define coefficienct found in the heat unsteady 1d heat equation
-c1 = rho * cp * A
 a = k * A
 c0 = P * beta
 
@@ -229,6 +230,8 @@ for i in range(6):
 
     # start = time.perf_counter()  # start timer
     K_global, F_global = assemble_K_and_F(
+        a=a,
+        c0=c0,
         wts=wts,
         xi_pts=xi_pts,
         g=g,
