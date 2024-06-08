@@ -5,6 +5,7 @@ from numba import njit, prange
 from pyamg.aggregation import adaptive_sa_solver
 from pyamg.krylov import fgmres
 from concurrent.futures import ThreadPoolExecutor
+import torch
 
 np.set_printoptions(precision=4)
 
@@ -37,7 +38,7 @@ Node (N)    0           1           2           3
 """
 
 
-@njit
+# @njit
 def generate_mesh(L, num_nodes, num_elems):
     # Generate the mesh
     xloc = np.linspace(0, L, num_nodes)  # location of x nodes
@@ -65,7 +66,7 @@ def generate_mesh(L, num_nodes, num_elems):
     return element_array, element_node_tag_array
 
 
-@njit
+# @njit
 def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     # Apply Dirichlet B.C.
     # modify K_global to be a pivot
@@ -82,7 +83,7 @@ def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     return K_global, F_global
 
 
-@njit
+# @njit
 def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     # compute the local K matrix
     I = 0.0
@@ -113,7 +114,7 @@ def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     return I
 
 
-@njit
+# @njit
 def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     # gauss points and weight
     I = 0.0
@@ -136,7 +137,7 @@ def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     return I
 
 
-@njit
+# @njit
 def assemble_K_and_F(
     num_elems,
     a,
@@ -178,7 +179,7 @@ if __name__ == "__main__":
     apply_convection = False  # apply forced convection at tip of beam
 
     # Establish the total number of elements and nodes and beam length
-    num_elems = 100_000
+    num_elems = 20_000
     num_nodes = num_elems + 1
     L = 0.05  # length of beam [m]
     D = 0.02  # diameter of rod [m]
@@ -264,16 +265,19 @@ if __name__ == "__main__":
         total_time_bc = end_bc - start_bc
         print(f"    Time to apply BC : {total_time_bc:.6e} s")
 
-        K_list.append(K_global)
-        F_list.append(F_global)
-
         """Solve system of Equations"""
-        # start_solve = time.perf_counter()  # start timer
-        # steady_state_soln = np.linalg.solve(K_global, F_global)
-        # end_solve = time.perf_counter()  # end timer
-        # total_time_solve = end_solve - start_solve
-        # print(f"    Time to solve Kx = F : {total_time_solve:.6e} s\n")
-        # soln_list.append(steady_state_soln)
+        start_solve = time.perf_counter()  # start timer
+
+        # steady_state_soln = torch.linalg.solve(
+        #     torch.from_numpy(K_global), torch.from_numpy(F_global)
+        # )
+
+        steady_state_soln = np.linalg.solve(K_global, F_global)
+
+        end_solve = time.perf_counter()  # end timer
+        total_time_solve = end_solve - start_solve
+        print(f"    Time to solve Kx = F : {total_time_solve:.6e} s\n")
+        soln_list.append(steady_state_soln)
 
     end = time.perf_counter()  # end timer
     total_time = end - start
