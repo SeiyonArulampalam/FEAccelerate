@@ -1,11 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-from numba import njit, prange
-from pyamg.aggregation import adaptive_sa_solver
-from pyamg.krylov import fgmres
-from concurrent.futures import ThreadPoolExecutor
+from numba import njit
 import torch
+from scipy import sparse
+from cholespy import CholeskySolverD, MatrixType
 
 np.set_printoptions(precision=4)
 
@@ -174,6 +173,18 @@ def assemble_K_and_F(
     return K_global, F_global
 
 
+def solve_system(K, F, num_nodes):
+    sK = sparse.coo_matrix(K)
+    sK_rows = sK.row
+    sK_cols = sK.col
+    solver = CholeskySolverD(n_rows = num_nodes, rows = sK_rows, cols = sK_cols, data = sK, MatrixType.COO)
+    x = torch.zeros_like(num_nodes)
+    
+    solver.solve(F, x)
+
+    return x
+
+
 if __name__ == "__main__":
     # Flags
     apply_convection = False  # apply forced convection at tip of beam
@@ -267,10 +278,12 @@ if __name__ == "__main__":
 
         """Solve system of Equations"""
         start_solve = time.perf_counter()  # start timer
+        
+        
 
-        steady_state_soln = torch.linalg.solve(
-            torch.from_numpy(K_global), torch.from_numpy(F_global)
-        )
+        # steady_state_soln = torch.linalg.solve(
+        #     torch.from_numpy(K_global), torch.from_numpy(F_global)
+        # )
 
         # steady_state_soln = np.linalg.solve(K_global, F_global)
 
