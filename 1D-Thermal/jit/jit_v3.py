@@ -7,7 +7,6 @@ from pyamg.krylov import fgmres
 from concurrent.futures import ThreadPoolExecutor
 
 np.set_printoptions(precision=4)
-# plt.style.use("dark_background")
 
 """
 PDE: - ∂/∂x(a*∂u/∂x) + c0*u = g(x,t)
@@ -38,8 +37,8 @@ Node (N)    0           1           2           3
 """
 
 
-# @njit
-def generate_mesh(L=1, num_nodes=2):
+@njit
+def generate_mesh(L, num_nodes, num_elems):
     # Generate the mesh
     xloc = np.linspace(0, L, num_nodes)  # location of x nodes
 
@@ -75,7 +74,7 @@ def generate_mesh(L=1, num_nodes=2):
     return element_array, element_node_tag_array
 
 
-# @njit
+@njit
 def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     # Apply Dirichlet B.C.
     # modify K_global to be a pivot
@@ -92,7 +91,7 @@ def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     return K_global, F_global
 
 
-# @njit
+@njit
 def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     # compute the local K matrix
     I = 0.0
@@ -123,7 +122,7 @@ def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     return I
 
 
-# @njit
+@njit
 def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     # gauss points and weight
     I = 0.0
@@ -146,8 +145,9 @@ def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     return I
 
 
-# @njit
+@njit
 def assemble_K_and_F(
+    num_elems,
     a,
     c0,
     wts,
@@ -214,11 +214,21 @@ if __name__ == "__main__":
     wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
     xi_pts = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
 
+    K_list = []
+    F_list = []
     start = time.perf_counter()  # start timer
     for i in range(6):
         print(f"Iteration : {i}:")
         """Generate mesh and connectivity array"""
-        element_array, element_node_tag_array = generate_mesh(L=L, num_nodes=num_nodes)
+        start_mesh = time.perf_counter()  # start timer
+        element_array, element_node_tag_array = generate_mesh(
+            L=L,
+            num_nodes=num_nodes,
+            num_elems=num_elems,
+        )
+        end_mesh = time.perf_counter()  # end timer
+        total_time_mesh = end_mesh - start_mesh
+        print(f"    Time to generate mesh : {total_time_mesh:.6e} s")
 
         """Compute K matrix anf F vector"""
         # Excitation of the beam
@@ -229,8 +239,9 @@ if __name__ == "__main__":
         K_global = np.zeros((num_nodes, num_nodes))
         F_global = np.zeros(num_nodes)
 
-        start = time.perf_counter()  # start timer
+        start_sys = time.perf_counter()  # start timer
         K_global, F_global = assemble_K_and_F(
+            num_elems=num_elems,
             a=a,
             c0=c0,
             wts=wts,
@@ -241,11 +252,12 @@ if __name__ == "__main__":
             K_global=K_global,
             F_global=F_global,
         )
-        end = time.perf_counter()  # end timer
-        total_time = end - start
-        print(f"    Time to assemble K and F : {total_time:.6e} s")
+        end_sys = time.perf_counter()  # end timer
+        total_time_sys = end_sys - start_sys
+        print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
 
         """Apply BCs to model"""
+        start_bc = time.perf_counter()  # start timer
         K_global, F_global = apply_dirichlet_BC(
             K_global=K_global,
             F_global=F_global,
@@ -256,17 +268,24 @@ if __name__ == "__main__":
         if apply_convection == True:
             K_global[-1, -1] += beta * A
 
+        end_bc = time.perf_counter()  # end timer
+        total_time_bc = end_bc - start_bc
+        print(f"    Time to apply BC : {total_time_bc:.6e} s")
+
+        K_list.append(K_global)
+        F_list.append(F_global)
+
         # """Solve system of Equations using numpy"""
         # start = time.perf_counter()  # start timer
         # steady_state_soln = np.linalg.solve(K_global, F_global)
         # end = time.perf_counter()  # end timer
         # total_time = end - start
         # print(f"    Time to solve Kx = F : {total_time:.6e} s\n")
-
     end = time.perf_counter()  # end timer
     total_time = end - start
     print("\n-------------------------------------")
-    print(f"\n Total Time : {total_time:.6e} s\n")
+    print(f"Total Time  : {total_time:.6e} s")
+    print(f"Total Elems : {num_elems}")
     print("-------------------------------------")
 
     # # Plot Results
