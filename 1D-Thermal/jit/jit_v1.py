@@ -1,7 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from pyinstrument import Profiler
 import time
+from numba import njit
+from pyamg.aggregation import adaptive_sa_solver
+from pyamg.krylov import fgmres
 
 np.set_printoptions(precision=4)
 # plt.style.use("dark_background")
@@ -36,6 +38,57 @@ Node (N)    0           1           2           3
 """
 
 
+@njit()
+def compute_local_K(wts, xi_pts, jacobian, i, j):
+    # compute the local K matrix
+    I = 0.0
+    for k in range(len(wts)):
+        # gauss points and weight
+        weight = wts[k]
+        xi = xi_pts[k]
+
+        # shape func evaluate at gauss point
+        N = [
+            1 - xi,
+            xi,
+        ]
+
+        # shape func derivative wrt global frame
+        dN_dx = [
+            -1 * (1.0 / jacobian),
+            1 * (1.0 / jacobian),
+        ]
+
+        # integrand components
+        comp1 = a * dN_dx[i] * dN_dx[j]
+        comp2 = c0 * N[i] * N[j]
+
+        # update integral approximation
+        I += weight * (comp1 + comp2) * jacobian
+
+    return I
+
+
+@njit()
+def compute_local_F(wts, xi_pts, jacobian, g_e, i):
+    # gauss points and weight
+    weight = wts[k]
+    xi = xi_pts[k]
+
+    # shape func evaluate at gauss point
+    N = [
+        1 - xi,
+        xi,
+    ]
+
+    # integrand component
+    comp1 = N[i] * g_e
+
+    # update the integral approximation
+    I += weight * comp1 * jacobian
+
+
+@njit()
 def assemble_K_and_F(
     wts,
     xi_pts,
@@ -113,7 +166,7 @@ def assemble_K_and_F(
 apply_convection = False  # apply forced convection at tip of beam
 
 # Establish the total number of elements and nodes and beam length
-num_elems = 5
+num_elems = 20_000
 num_nodes = num_elems + 1
 L = 0.05  # length of beam [m]
 D = 0.02  # diameter of rod [m]
@@ -184,19 +237,19 @@ K_global = np.zeros((num_nodes, num_nodes))
 F_global = np.zeros(num_nodes)
 
 start = time.perf_counter()  # start timer
-K_global, F_global = assemble_K_and_F(
-    wts,
-    xi_pts,
-    g,
-    element_node_tag_array,
-    element_array,
-    K_global,
-    F_global,
-)
+for i in range(200):
+    K_global, F_global = assemble_K_and_F(
+        wts,
+        xi_pts,
+        g,
+        element_node_tag_array,
+        element_array,
+        K_global,
+        F_global,
+    )
 end = time.perf_counter()  # end timer
-
 total_time = end - start
-print(f"\n Time to assemble K and F = {total_time:.6e} s\n")
+print(f"\n Time to assemble K and F : {total_time:.6e} s\n")
 
 """Apply BCs to model"""
 # Apply Dirichlet B.C.
@@ -220,19 +273,39 @@ if apply_convection == True:
 # print("\nF vector Modified:")
 # print(F_global)
 
-"""Solve system of Equations"""
+
+start = time.perf_counter()  # start timer
+"""Solve system of Equations using numpy"""
 steady_state_soln = np.linalg.solve(K_global, F_global)
+
+"""Solve system using pyAMG"""
+# [asa, work] = adaptive_sa_solver(
+#     K_global,
+#     num_candidates=5,
+#     candidate_iters=10,
+#     prepostsmoother="gauss_seidel",
+#     strength="symmetric",
+#     aggregate="standard",
+#     smooth="jacobi",
+#     coarse_solver="splu",
+# )
+# M = asa.aspreconditioner(cycle="W")
+# steady_state_soln, _ = fgmres(K_global, F_global, tol=1e-16, maxiter=30, M=M)
+
+end = time.perf_counter()  # end timer
+total_time = end - start
+print(f"\n Time to solve Kx = F : {total_time:.6e} s\n")
 
 # print("\nSolution Steady State:")
 # print(steady_state_soln)
 
 
-# Plot Results
+# # Plot Results
 fig, ax = plt.subplots(nrows=1, ncols=1)
 ax.plot(xloc, steady_state_soln, "m-")
 ax.set_xlabel("Location (m)")
 ax.set_ylabel("Temperature (C)")
 ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
 plt.grid()
-# plt.show()
-plt.savefig("soln_gpu.jpg", dpi=800)
+plt.show()
+# plt.savefig("soln_jit.jpg", dpi=800)
