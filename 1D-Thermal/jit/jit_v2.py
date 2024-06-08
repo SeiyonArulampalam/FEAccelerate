@@ -130,7 +130,7 @@ def assemble_K_and_F(
 apply_convection = False  # apply forced convection at tip of beam
 
 # Establish the total number of elements and nodes and beam length
-num_elems = 10_000
+num_elems = 100_000
 num_nodes = num_elems + 1
 L = 0.05  # length of beam [m]
 D = 0.02  # diameter of rod [m]
@@ -213,7 +213,8 @@ for i in range(6):
     )
 end = time.perf_counter()  # end timer
 total_time = end - start
-print(f"\n Time to assemble K and F : {total_time:.6e} s\n")
+print(f"\n Time to assemble K and F : {total_time:.6e} s")
+print(f" Total number of elements : {num_elems} \n")
 
 exit()
 
