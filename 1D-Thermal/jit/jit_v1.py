@@ -39,56 +39,6 @@ Node (N)    0           1           2           3
 
 
 @njit()
-def compute_local_K(wts, xi_pts, jacobian, i, j):
-    # compute the local K matrix
-    I = 0.0
-    for k in range(len(wts)):
-        # gauss points and weight
-        weight = wts[k]
-        xi = xi_pts[k]
-
-        # shape func evaluate at gauss point
-        N = [
-            1 - xi,
-            xi,
-        ]
-
-        # shape func derivative wrt global frame
-        dN_dx = [
-            -1 * (1.0 / jacobian),
-            1 * (1.0 / jacobian),
-        ]
-
-        # integrand components
-        comp1 = a * dN_dx[i] * dN_dx[j]
-        comp2 = c0 * N[i] * N[j]
-
-        # update integral approximation
-        I += weight * (comp1 + comp2) * jacobian
-
-    return I
-
-
-@njit()
-def compute_local_F(wts, xi_pts, jacobian, g_e, i):
-    # gauss points and weight
-    weight = wts[k]
-    xi = xi_pts[k]
-
-    # shape func evaluate at gauss point
-    N = [
-        1 - xi,
-        xi,
-    ]
-
-    # integrand component
-    comp1 = N[i] * g_e
-
-    # update the integral approximation
-    I += weight * comp1 * jacobian
-
-
-@njit()
 def assemble_K_and_F(
     wts,
     xi_pts,
