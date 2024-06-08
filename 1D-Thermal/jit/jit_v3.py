@@ -38,7 +38,7 @@ Node (N)    0           1           2           3
 """
 
 
-# @njit
+@njit
 def generate_mesh(L, num_nodes, num_elems):
     # Generate the mesh
     xloc = np.linspace(0, L, num_nodes)  # location of x nodes
@@ -66,7 +66,7 @@ def generate_mesh(L, num_nodes, num_elems):
     return element_array, element_node_tag_array
 
 
-# @njit
+@njit
 def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     # Apply Dirichlet B.C.
     # modify K_global to be a pivot
@@ -83,7 +83,7 @@ def apply_dirichlet_BC(K_global, F_global, u_root=300.0):
     return K_global, F_global
 
 
-# @njit
+@njit
 def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     # compute the local K matrix
     I = 0.0
@@ -114,7 +114,7 @@ def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
     return I
 
 
-# @njit
+@njit
 def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     # gauss points and weight
     I = 0.0
@@ -137,7 +137,7 @@ def compute_local_F(wts, xi_pts, jacobian, g_e, i):
     return I
 
 
-# @njit
+@njit
 def assemble_K_and_F(
     num_elems,
     a,
@@ -268,11 +268,11 @@ if __name__ == "__main__":
         """Solve system of Equations"""
         start_solve = time.perf_counter()  # start timer
 
-        # steady_state_soln = torch.linalg.solve(
-        #     torch.from_numpy(K_global), torch.from_numpy(F_global)
-        # )
+        steady_state_soln = torch.linalg.solve(
+            torch.from_numpy(K_global), torch.from_numpy(F_global)
+        )
 
-        steady_state_soln = np.linalg.solve(K_global, F_global)
+        # steady_state_soln = np.linalg.solve(K_global, F_global)
 
         end_solve = time.perf_counter()  # end timer
         total_time_solve = end_solve - start_solve
@@ -287,11 +287,11 @@ if __name__ == "__main__":
     print("-------------------------------------")
 
     # Plot Results
-    # fig, ax = plt.subplots(nrows=1, ncols=1)
-    # ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
-    # ax.set_xlabel("Location (m)")
-    # ax.set_ylabel("Temperature (C)")
-    # ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
-    # plt.grid()
-    # plt.show()
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
+    ax.set_xlabel("Location (m)")
+    ax.set_ylabel("Temperature (C)")
+    ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
+    plt.grid()
+    plt.show()
     # plt.savefig("soln_jit.jpg", dpi=800)
