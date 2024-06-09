@@ -268,10 +268,12 @@ if __name__ == "__main__":
         """Solve system of Equations"""
         start_solve = time.perf_counter()  # start timer
 
+        # Torch Solve
         steady_state_soln = torch.linalg.solve(
             torch.from_numpy(K_global), torch.from_numpy(F_global)
         )
 
+        # NUMPY Solve
         # steady_state_soln = np.linalg.solve(K_global, F_global)
 
         end_solve = time.perf_counter()  # end timer
