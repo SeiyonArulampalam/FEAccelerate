@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-from numba import njit
+from numba import njit, cuda
 import torch
 from scipy import sparse
 import cupy
@@ -180,12 +180,90 @@ def assemble_K_and_F(
     return K_global, F_global
 
 
+#############################################################################################################################
+
+
+@cuda.jit
+def assemble_K_and_F_kernel(
+    num_elems,
+    a,
+    c0,
+    g,
+    element_node_tag_array,
+    element_array,
+    K_global,
+    F_global,
+):
+    e = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x  # get the thread Id
+    # stride = cuda.blockIdx.x * cuda.gridDim.x  # compute the stide
+
+    if e < num_elems:
+        # loop through each element and update the global matrix
+        x_left = element_array[e][1]
+        x_right = element_array[e][2]
+        jacobian = x_right - x_left
+
+        for i in range(2):
+            for j in range(2):
+                # compute the local K matrix
+                I = 0.0
+                for k in range(len(wts)):
+                    # gauss points and weight
+                    weight = wts[k]
+                    xi = xi_pts[k]
+
+                    # shape func evaluate at gauss point
+                    if i == 0 and j == 0:
+                        N = (1 - xi) * (1 - xi)
+                        dN_dx = (-1 * (1.0 / jacobian)) * (-1 * (1.0 / jacobian))
+                    elif (i == 1 and j == 0) or (i == 0 and j == 1):
+                        N = (xi) * (1 - xi)
+                        dN_dx = (1 * (1.0 / jacobian)) * (-1 * (1.0 / jacobian))
+                    elif i == 1 and j == 1:
+                        N = xi * xi
+                        dN_dx = (1 * (1.0 / jacobian)) * (1 * (1.0 / jacobian))
+
+                    # integrand components
+                    comp1 = a * dN_dx
+                    comp2 = c0 * N
+
+                    # update integral approximation
+                    I += weight * (comp1 + comp2) * jacobian
+
+                n_i_e = element_node_tag_array[e][i + 1]
+                n_j_e = element_node_tag_array[e][j + 1]
+                K_global[int(n_i_e), int(n_j_e)] += I
+
+        for i in range(2):
+            # compute the local f vector
+            I = 0.0
+            for k in range(len(wts)):
+                # gauss points and weight
+                weight = wts[k]
+                xi = xi_pts[k]
+
+                # shape func evaluate at gauss point
+                if i == 0:
+                    N = 1 - xi
+                elif i == 1:
+                    N = xi
+
+                # integrand component
+                comp1 = N * g[e]
+
+                # update the integral approximation
+                I += weight * comp1 * jacobian
+
+            n_i_e = element_node_tag_array[e][i + 1]
+            F_global[int(n_i_e)] += I
+
+
 if __name__ == "__main__":
     # Flags
     apply_convection = False  # apply forced convection at tip of beam
 
     # Establish the total number of elements and nodes and beam length
-    num_elems = 20_000
+    num_elems = 20000
     num_nodes = num_elems + 1
     L = 0.05  # length of beam [m]
     D = 0.02  # diameter of rod [m]
@@ -212,9 +290,6 @@ if __name__ == "__main__":
     wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
     xi_pts = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
 
-    K_list = []
-    F_list = []
-    soln_list = []
     start = time.perf_counter()  # start timer
     for i in range(6):
         print(f"Iteration : {i}:")
@@ -229,31 +304,63 @@ if __name__ == "__main__":
         total_time_mesh = end_mesh - start_mesh
         print(f"    Time to generate mesh : {total_time_mesh:.6e} s")
 
-        """Compute K matrix anf F vector"""
-        # Excitation of the beam
-        g = np.zeros(num_elems)  # initialize excitation vector
-
+        """Initialize K and F and beam excitations"""
         # Initialize the vectors and matrixes for the finite element analysis
         # Create device-side copies of the arrays
         K_global = np.zeros((num_nodes, num_nodes))
         F_global = np.zeros(num_nodes)
 
+        # Excitation of the beam
+        g = np.zeros(num_elems)  # initialize excitation vector
+
+        """Compute K matrix and F vector using cuda kernel"""
+        # send copy to gpu
+        K_gpu = cuda.to_device(K_global)
+        F_gpu = cuda.to_device(F_global)
+        g_gpu = cuda.to_device(g)
+        element_array_gpu = cuda.to_device(element_array)
+        element_node_tag_array_gpu = cuda.to_device(element_node_tag_array)
+
+        # define kernel execution parameters
+        threadsperblock = 32
+        blockspergrid = num_nodes + (threadsperblock - 1)
+
         start_sys = time.perf_counter()  # start timer
-        K_global, F_global = assemble_K_and_F(
-            num_elems=num_elems,
-            a=a,
-            c0=c0,
-            wts=wts,
-            xi_pts=xi_pts,
-            g=g,
-            element_node_tag_array=element_node_tag_array,
-            element_array=element_array,
-            K_global=K_global,
-            F_global=F_global,
+        assemble_K_and_F_kernel[blockspergrid, threadsperblock](
+            num_elems,
+            a,
+            c0,
+            g_gpu,
+            element_node_tag_array_gpu,
+            element_array_gpu,
+            K_gpu,
+            F_gpu,
         )
         end_sys = time.perf_counter()  # end timer
         total_time_sys = end_sys - start_sys
         print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
+
+        # send back the K matrix and F vector
+        K_global = K_gpu.copy_to_host()
+        F_global = F_gpu.copy_to_host()
+
+        """Compute K matrix anf F vector Using Jit"""
+        # start_sys = time.perf_counter()  # start timer
+        # K_global, F_global = assemble_K_and_F(
+        #     num_elems=num_elems,
+        #     a=a,
+        #     c0=c0,
+        #     wts=wts,
+        #     xi_pts=xi_pts,
+        #     g=g,
+        #     element_node_tag_array=element_node_tag_array,
+        #     element_array=element_array,
+        #     K_global=K_global,
+        #     F_global=F_global,
+        # )
+        # end_sys = time.perf_counter()  # end timer
+        # total_time_sys = end_sys - start_sys
+        # print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
 
         """Apply BCs to model"""
         start_bc = time.perf_counter()  # start timer
@@ -309,4 +416,4 @@ if __name__ == "__main__":
     ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
     plt.grid()
     # plt.show()
-    plt.savefig("soln_jit.jpg", dpi=800)
+    plt.savefig("soln_gpu_test_20K.jpg", dpi=800)
