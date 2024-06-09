@@ -275,10 +275,12 @@ if __name__ == "__main__":
         start_solve = time.perf_counter()  # start timer
 
         # CUPY
-        # K_gpu = cupy.asarray(K_global)
-        # F_gpu = cupy.asarray(F_global)
-        # soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)
-        # steady_state_soln = cupy.asnumpy(soln_gpu)
+        K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+        F_gpu = cupy.asarray(F_global)  # send G_global to gpu
+        soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
+        steady_state_soln = cupy.asnumpy(
+            soln_gpu
+        )  # send back the GPU solution to the CPU
 
         # TORCH
         # steady_state_soln = torch.linalg.solve(
@@ -286,7 +288,7 @@ if __name__ == "__main__":
         # )
 
         # NUMPY
-        steady_state_soln = np.linalg.solve(K_global, F_global)
+        # steady_state_soln = np.linalg.solve(K_global, F_global)
 
         end_solve = time.perf_counter()  # end timer
         total_time_solve = end_solve - start_solve
@@ -299,12 +301,12 @@ if __name__ == "__main__":
     print(f"Total Elems : {num_elems}")
     print("-------------------------------------")
 
-    # # Plot Results
-    # fig, ax = plt.subplots(nrows=1, ncols=1)
-    # ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
-    # ax.set_xlabel("Location (m)")
-    # ax.set_ylabel("Temperature (C)")
-    # ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
-    # plt.grid()
+    # Plot Results
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
+    ax.set_xlabel("Location (m)")
+    ax.set_ylabel("Temperature (C)")
+    ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
+    plt.grid()
     # plt.show()
-    # plt.savefig("soln_jit.jpg", dpi=800)
+    plt.savefig("soln_jit.jpg", dpi=800)
