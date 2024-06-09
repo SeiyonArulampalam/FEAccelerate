@@ -93,16 +93,20 @@ def compute_local_K(a, c0, wts, xi_pts, jacobian, i, j):
         xi = xi_pts[k]
 
         # shape func evaluate at gauss point
-        N = [
-            1 - xi,
-            xi,
-        ]
+        N = np.array(
+            [
+                1 - xi,
+                xi,
+            ]
+        )
 
         # shape func derivative wrt global frame
-        dN_dx = [
-            -1 * (1.0 / jacobian),
-            1 * (1.0 / jacobian),
-        ]
+        dN_dx = np.array(
+            [
+                -1 * (1.0 / jacobian),
+                1 * (1.0 / jacobian),
+            ]
+        )
 
         # integrand components
         comp1 = a * dN_dx[i] * dN_dx[j]
@@ -124,10 +128,12 @@ def compute_local_F(wts, xi_pts, jacobian, g_e, i):
         xi = xi_pts[k]
 
         # shape func evaluate at gauss point
-        N = [
-            1 - xi,
-            xi,
-        ]
+        N = np.array(
+            [
+                1 - xi,
+                xi,
+            ]
+        )
 
         # integrand component
         comp1 = N[i] * g_e
