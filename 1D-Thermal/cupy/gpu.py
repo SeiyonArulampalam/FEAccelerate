@@ -4,7 +4,8 @@ import time
 from numba import njit
 import torch
 from scipy import sparse
-from cholespy import CholeskySolverD, MatrixType
+import cupy
+
 
 np.set_printoptions(precision=4)
 
@@ -24,7 +25,7 @@ rho = mass density
 β = heat transfer coeff
 k = thermal conductivity
 A = cross-section area
-P = perimeter of rod end (curcumprence of rod)
+P = perimeter of rod end (circumprence of rod)
 cp =specific heat at constant pressure
 g = internal excitation
 
@@ -173,18 +174,6 @@ def assemble_K_and_F(
     return K_global, F_global
 
 
-def solve_system(K, F, num_nodes):
-    sK = sparse.coo_matrix(K)
-    sK_rows = sK.row
-    sK_cols = sK.col
-    solver = CholeskySolverD(n_rows = num_nodes, rows = sK_rows, cols = sK_cols, data = sK, MatrixType.COO)
-    x = torch.zeros_like(num_nodes)
-    
-    solver.solve(F, x)
-
-    return x
-
-
 if __name__ == "__main__":
     # Flags
     apply_convection = False  # apply forced convection at tip of beam
@@ -278,19 +267,24 @@ if __name__ == "__main__":
 
         """Solve system of Equations"""
         start_solve = time.perf_counter()  # start timer
-        
-        
 
+        # CUPY
+        # K_gpu = cupy.asarray(K_global)
+        # F_gpu = cupy.asarray(F_global)
+        # soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)
+        # steady_state_soln = cupy.asnumpy(soln_gpu)
+
+        # TORCH
         # steady_state_soln = torch.linalg.solve(
         #     torch.from_numpy(K_global), torch.from_numpy(F_global)
         # )
 
-        # steady_state_soln = np.linalg.solve(K_global, F_global)
+        # NUMPY
+        steady_state_soln = np.linalg.solve(K_global, F_global)
 
         end_solve = time.perf_counter()  # end timer
         total_time_solve = end_solve - start_solve
         print(f"    Time to solve Kx = F : {total_time_solve:.6e} s\n")
-        soln_list.append(steady_state_soln)
 
     end = time.perf_counter()  # end timer
     total_time = end - start
@@ -299,12 +293,12 @@ if __name__ == "__main__":
     print(f"Total Elems : {num_elems}")
     print("-------------------------------------")
 
-    # Plot Results
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
-    ax.set_xlabel("Location (m)")
-    ax.set_ylabel("Temperature (C)")
-    ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
-    plt.grid()
-    plt.show()
+    # # Plot Results
+    # fig, ax = plt.subplots(nrows=1, ncols=1)
+    # ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
+    # ax.set_xlabel("Location (m)")
+    # ax.set_ylabel("Temperature (C)")
+    # ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
+    # plt.grid()
+    # plt.show()
     # plt.savefig("soln_jit.jpg", dpi=800)
