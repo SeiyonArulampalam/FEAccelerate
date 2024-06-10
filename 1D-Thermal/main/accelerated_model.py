@@ -38,6 +38,18 @@ Node (N)    0           1           2           3
 """
 
 
+def plot_result(L, num_nodes, num_elems, steady_state_soln, filename="soln.jpg"):
+    # Plot Results
+    fig, ax = plt.subplots(nrows=1, ncols=1)
+    ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
+    ax.set_xlabel("Location (m)")
+    ax.set_ylabel("Temperature (C)")
+    ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
+    plt.grid()
+    # plt.show()
+    plt.savefig(filename, dpi=800)
+
+
 @njit
 def generate_mesh(L, num_nodes, num_elems):
     # Generate the mesh
@@ -194,10 +206,14 @@ def assemble_K_and_F_kernel(
     K_global,
     F_global,
 ):
-    e = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x  # get the thread Id
-    # stride = cuda.blockIdx.x * cuda.gridDim.x  # compute the stide
+    # get the thread Id
+    idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
 
-    if e < num_elems:
+    # get the stride length (cuda.blockIdx.x * cuda.gridDim.x)
+    stride = cuda.gridsize(1)
+
+    # if e < num_elems:
+    for e in range(idx, num_elems, stride):
         # loop through each element and update the global matrix
         x_left = element_array[e][1]
         x_right = element_array[e][2]
@@ -263,7 +279,7 @@ if __name__ == "__main__":
     apply_convection = False  # apply forced convection at tip of beam
 
     # Establish the total number of elements and nodes and beam length
-    num_elems = 20000
+    num_elems = 200
     num_nodes = num_elems + 1
     L = 0.05  # length of beam [m]
     D = 0.02  # diameter of rod [m]
@@ -323,7 +339,7 @@ if __name__ == "__main__":
 
         # define kernel execution parameters
         threadsperblock = 32
-        blockspergrid = num_nodes + (threadsperblock - 1)
+        blockspergrid = (num_nodes + (threadsperblock - 1)) // threadsperblock
 
         start_sys = time.perf_counter()  # start timer
         assemble_K_and_F_kernel[blockspergrid, threadsperblock](
@@ -401,6 +417,9 @@ if __name__ == "__main__":
         total_time_solve = end_solve - start_solve
         print(f"    Time to solve Kx = F : {total_time_solve:.6e} s\n")
 
+        # plot result
+        plot_result(L, num_nodes, num_elems, steady_state_soln, filename=f"gpu_{i}.jpg")
+
     end = time.perf_counter()  # end timer
     total_time = end - start
     print("\n-------------------------------------")
@@ -409,11 +428,4 @@ if __name__ == "__main__":
     print("-------------------------------------")
 
     # Plot Results
-    fig, ax = plt.subplots(nrows=1, ncols=1)
-    ax.plot(np.linspace(0, L, num_nodes), steady_state_soln, "m-")
-    ax.set_xlabel("Location (m)")
-    ax.set_ylabel("Temperature (C)")
-    ax.set_title(f"Steady-State Heat transfer simulation with {num_elems} elements")
-    plt.grid()
-    # plt.show()
-    plt.savefig("soln_gpu_test_20K.jpg", dpi=800)
+    plot_result(L, num_nodes, num_elems, steady_state_soln)
