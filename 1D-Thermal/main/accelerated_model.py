@@ -414,12 +414,6 @@ if __name__ == "__main__":
             soln_gpu
         )  # send back the GPU solution to the CPU
 
-        # # CUPYX Scipy Sparse Linalg
-        # K_gpu = csr_matrix(sparse.csr_matrix(K_global))  # send K_global as a csr matrix to GPU
-        # F_gpu = cupy.asarray(F_global)  # send F_global to gpu
-        # soln_gpu = cpssl.gmres(K_gpu, F_gpu)
-        # steady_state_soln = cupy.asnumpy(soln_gpu)
-
         # TORCH
         # steady_state_soln = torch.linalg.solve(
         #     torch.from_numpy(K_global), torch.from_numpy(F_global)
