@@ -5,6 +5,8 @@ from numba import njit, cuda
 import torch
 from scipy import sparse
 import cupy
+import cupyx.scipy.sparse.linalg as cpssl
+from cupyx.scipy.sparse import csr_matrix
 
 
 np.set_printoptions(precision=4)
@@ -194,6 +196,8 @@ def assemble_K_and_F(
 
 @cuda.jit
 def assemble_K_and_F_kernel(
+    wts,
+    xi_pts,
     num_elems,
     a,
     c0,
@@ -270,6 +274,8 @@ def assemble_K_and_F_kernel(
             n_i_e = element_node_tag_array[e][i + 1]
             F_global[int(n_i_e)] += I
 
+    cuda.syncthreads()
+
 
 if __name__ == "__main__":
     # Flags
@@ -331,15 +337,19 @@ if __name__ == "__main__":
         K_gpu = cuda.to_device(K_global)
         F_gpu = cuda.to_device(F_global)
         g_gpu = cuda.to_device(g)
+        wts_gpu = cuda.to_device(wts)
+        xi_pts_gpu = cuda.to_device(xi_pts)
         element_array_gpu = cuda.to_device(element_array)
         element_node_tag_array_gpu = cuda.to_device(element_node_tag_array)
 
         # define kernel execution parameters
-        threadsperblock = 32
+        threadsperblock = 16
         blockspergrid = (num_nodes + (threadsperblock - 1)) // threadsperblock
 
         start_sys = time.perf_counter()  # start timer
         assemble_K_and_F_kernel[blockspergrid, threadsperblock](
+            wts_gpu,
+            xi_pts_gpu,
             num_elems,
             a,
             c0,
@@ -356,6 +366,8 @@ if __name__ == "__main__":
         # send back the K matrix and F vector
         K_global = K_gpu.copy_to_host()
         F_global = F_gpu.copy_to_host()
+
+        cuda.synchronize()
 
         """Compute K matrix anf F vector Using Jit"""
         # start_sys = time.perf_counter()  # start timer
@@ -396,11 +408,17 @@ if __name__ == "__main__":
 
         # CUPY
         K_gpu = cupy.asarray(K_global)  # send K_global to gpu
-        F_gpu = cupy.asarray(F_global)  # send G_global to gpu
+        F_gpu = cupy.asarray(F_global)  # send F_global to gpu
         soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
         steady_state_soln = cupy.asnumpy(
             soln_gpu
         )  # send back the GPU solution to the CPU
+
+        # # CUPYX Scipy Sparse Linalg
+        # K_gpu = csr_matrix(sparse.csr_matrix(K_global))  # send K_global as a csr matrix to GPU
+        # F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+        # soln_gpu = cpssl.gmres(K_gpu, F_gpu)
+        # steady_state_soln = cupy.asnumpy(soln_gpu)
 
         # TORCH
         # steady_state_soln = torch.linalg.solve(
