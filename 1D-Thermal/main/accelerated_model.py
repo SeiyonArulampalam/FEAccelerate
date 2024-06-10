@@ -192,9 +192,6 @@ def assemble_K_and_F(
     return K_global, F_global
 
 
-#############################################################################################################################
-
-
 @cuda.jit
 def assemble_K_and_F_kernel(
     num_elems,
@@ -279,7 +276,7 @@ if __name__ == "__main__":
     apply_convection = False  # apply forced convection at tip of beam
 
     # Establish the total number of elements and nodes and beam length
-    num_elems = 200
+    num_elems = 20_000
     num_nodes = num_elems + 1
     L = 0.05  # length of beam [m]
     D = 0.02  # diameter of rod [m]
