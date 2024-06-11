@@ -309,6 +309,10 @@ if __name__ == "__main__":
     num_elems_parsed = args.num_elems
     solver_parsed = args.solver
 
+    print("-------------------------------------")
+    print(cuda.detect())
+    print("-------------------------------------")
+
     print("\n-----------------------------------")
     print("FEA Setting:")
     print("   # of Elements :", num_elems_parsed)
@@ -347,7 +351,7 @@ if __name__ == "__main__":
     wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
     xi_pts = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
 
-    print("\n-------------------------------------------------------------")
+    print("-------------------------------------------------------------")
     start = time.perf_counter()  # start timer
     for i in range(6):
         print(f"Iteration : {i}:")
