@@ -407,12 +407,19 @@ if __name__ == "__main__":
         start_solve = time.perf_counter()  # start timer
 
         # CUPY
+        # K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+        # F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+        # soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
+        # steady_state_soln = cupy.asnumpy(
+        #     soln_gpu
+        # )  # send back the GPU solution to the CPU
+
+        # CUPX
         K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+        K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
         F_gpu = cupy.asarray(F_global)  # send F_global to gpu
-        soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
-        steady_state_soln = cupy.asnumpy(
-            soln_gpu
-        )  # send back the GPU solution to the CPU
+        soln= cpssl.spsolve(K_csc_gpu, F_gpu)  # solve using spsolve
+        steady_state_soln = soln.get()  # send soln back to host
 
         # TORCH
         # steady_state_soln = torch.linalg.solve(
