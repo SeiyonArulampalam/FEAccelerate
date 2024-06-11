@@ -1,3 +1,4 @@
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 import time
@@ -278,11 +279,48 @@ def assemble_K_and_F_kernel(
 
 
 if __name__ == "__main__":
+    # Setup the argument parser for command line interface
+    parser = argparse.ArgumentParser(
+        description="Select solver settings for the 1D heat trasnfer model."
+    )
+    parser.add_argument(
+        "-a",
+        "--assemble",
+        type=str,
+        help="Choose between jit and cuda to assemble Kx = F.",
+        default="cuda",
+    )
+    parser.add_argument(
+        "-n",
+        "--num_elems",
+        type=int,
+        help="Insert total number of element for analysis.",
+        default=1000,
+    )
+    parser.add_argument(
+        "-s",
+        "--solver",
+        type=str,
+        help="Select cupy, cupyx, torch, or numpy to solve system of equations.",
+        default="cupyx",
+    )
+    args = parser.parse_args()
+    assemble_parsed = args.assemble
+    num_elems_parsed = args.num_elems
+    solver_parsed = args.solver
+
+    print("\n-----------------------------------")
+    print("FEA Setting:")
+    print("   # of Elements :", num_elems_parsed)
+    print("   Assembly Method :", assemble_parsed)
+    print("   Solver Method :", solver_parsed)
+    print("-----------------------------------\n")
+
     # Flags
     apply_convection = False  # apply forced convection at tip of beam
 
     # Establish the total number of elements and nodes and beam length
-    num_elems = 20_000
+    num_elems = num_elems_parsed
     num_nodes = num_elems + 1
     L = 0.05  # length of beam [m]
     D = 0.02  # diameter of rod [m]
@@ -309,6 +347,7 @@ if __name__ == "__main__":
     wts = np.array([0.568889, 0.478629, 0.478629, 0.236927, 0.236927]) * 0.5
     xi_pts = np.array([0.0, 0.538469, -0.538469, 0.90618, -0.90618]) * 0.5 + 0.5
 
+    print("\n-------------------------------------------------------------")
     start = time.perf_counter()  # start timer
     for i in range(6):
         print(f"Iteration : {i}:")
@@ -332,60 +371,62 @@ if __name__ == "__main__":
         # Excitation of the beam
         g = np.zeros(num_elems)  # initialize excitation vector
 
-        """Compute K matrix and F vector using cuda kernel"""
-        # send copy to gpu
-        K_gpu = cuda.to_device(K_global)
-        F_gpu = cuda.to_device(F_global)
-        g_gpu = cuda.to_device(g)
-        wts_gpu = cuda.to_device(wts)
-        xi_pts_gpu = cuda.to_device(xi_pts)
-        element_array_gpu = cuda.to_device(element_array)
-        element_node_tag_array_gpu = cuda.to_device(element_node_tag_array)
+        if assemble_parsed == "cuda":
+            """Compute K matrix and F vector using cuda kernel"""
+            # send copy to gpu
+            K_gpu = cuda.to_device(K_global)
+            F_gpu = cuda.to_device(F_global)
+            g_gpu = cuda.to_device(g)
+            wts_gpu = cuda.to_device(wts)
+            xi_pts_gpu = cuda.to_device(xi_pts)
+            element_array_gpu = cuda.to_device(element_array)
+            element_node_tag_array_gpu = cuda.to_device(element_node_tag_array)
 
-        # define kernel execution parameters
-        threadsperblock = 16
-        blockspergrid = (num_nodes + (threadsperblock - 1)) // threadsperblock
+            # define kernel execution parameters
+            threadsperblock = 16
+            blockspergrid = (num_nodes + (threadsperblock - 1)) // threadsperblock
 
-        start_sys = time.perf_counter()  # start timer
-        assemble_K_and_F_kernel[blockspergrid, threadsperblock](
-            wts_gpu,
-            xi_pts_gpu,
-            num_elems,
-            a,
-            c0,
-            g_gpu,
-            element_node_tag_array_gpu,
-            element_array_gpu,
-            K_gpu,
-            F_gpu,
-        )
-        end_sys = time.perf_counter()  # end timer
-        total_time_sys = end_sys - start_sys
-        print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
+            start_sys = time.perf_counter()  # start timer
+            assemble_K_and_F_kernel[blockspergrid, threadsperblock](
+                wts_gpu,
+                xi_pts_gpu,
+                num_elems,
+                a,
+                c0,
+                g_gpu,
+                element_node_tag_array_gpu,
+                element_array_gpu,
+                K_gpu,
+                F_gpu,
+            )
+            end_sys = time.perf_counter()  # end timer
+            total_time_sys = end_sys - start_sys
+            print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
 
-        # send back the K matrix and F vector
-        K_global = K_gpu.copy_to_host()
-        F_global = F_gpu.copy_to_host()
+            # send back the K matrix and F vector
+            K_global = K_gpu.copy_to_host()
+            F_global = F_gpu.copy_to_host()
 
-        cuda.synchronize()
+            cuda.synchronize()
 
-        """Compute K matrix anf F vector Using Jit"""
-        # start_sys = time.perf_counter()  # start timer
-        # K_global, F_global = assemble_K_and_F(
-        #     num_elems=num_elems,
-        #     a=a,
-        #     c0=c0,
-        #     wts=wts,
-        #     xi_pts=xi_pts,
-        #     g=g,
-        #     element_node_tag_array=element_node_tag_array,
-        #     element_array=element_array,
-        #     K_global=K_global,
-        #     F_global=F_global,
-        # )
-        # end_sys = time.perf_counter()  # end timer
-        # total_time_sys = end_sys - start_sys
-        # print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
+        elif assemble_parsed == "jit":
+            """Compute K matrix anf F vector Using Jit"""
+            start_sys = time.perf_counter()  # start timer
+            K_global, F_global = assemble_K_and_F(
+                num_elems=num_elems,
+                a=a,
+                c0=c0,
+                wts=wts,
+                xi_pts=xi_pts,
+                g=g,
+                element_node_tag_array=element_node_tag_array,
+                element_array=element_array,
+                K_global=K_global,
+                F_global=F_global,
+            )
+            end_sys = time.perf_counter()  # end timer
+            total_time_sys = end_sys - start_sys
+            print(f"    Time to assemble K and F : {total_time_sys:.6e} s")
 
         """Apply BCs to model"""
         start_bc = time.perf_counter()  # start timer
@@ -406,28 +447,32 @@ if __name__ == "__main__":
         """Solve system of Equations"""
         start_solve = time.perf_counter()  # start timer
 
-        # CUPY
-        # K_gpu = cupy.asarray(K_global)  # send K_global to gpu
-        # F_gpu = cupy.asarray(F_global)  # send F_global to gpu
-        # soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
-        # steady_state_soln = cupy.asnumpy(
-        #     soln_gpu
-        # )  # send back the GPU solution to the CPU
+        if solver_parsed == "cupy":
+            """Solve system of equation using cupy"""
+            K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+            F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+            soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
 
-        # CUPX
-        K_gpu = cupy.asarray(K_global)  # send K_global to gpu
-        K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
-        F_gpu = cupy.asarray(F_global)  # send F_global to gpu
-        soln= cpssl.spsolve(K_csc_gpu, F_gpu)  # solve using spsolve
-        steady_state_soln = soln.get()  # send soln back to host
+            # send back the GPU solution to the CPU
+            steady_state_soln = cupy.asnumpy(soln_gpu)
 
-        # TORCH
-        # steady_state_soln = torch.linalg.solve(
-        #     torch.from_numpy(K_global), torch.from_numpy(F_global)
-        # )
+        elif solver_parsed == "cupyx":
+            """Solve system of equations using cupyx"""
+            K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+            K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
+            F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+            soln = cpssl.spsolve(K_csc_gpu, F_gpu)  # solve using spsolve
+            steady_state_soln = soln.get()  # send soln back to host
 
-        # NUMPY
-        # steady_state_soln = np.linalg.solve(K_global, F_global)
+        elif solver_parsed == "torch":
+            """Solve system of equation using torch"""
+            steady_state_soln = torch.linalg.solve(
+                torch.from_numpy(K_global), torch.from_numpy(F_global)
+            )
+
+        elif solver_parsed == "numpy":
+            """Solve system of equation using numpy"""
+            steady_state_soln = np.linalg.solve(K_global, F_global)
 
         end_solve = time.perf_counter()  # end timer
         total_time_solve = end_solve - start_solve
@@ -440,8 +485,4 @@ if __name__ == "__main__":
     total_time = end - start
     print("\n-------------------------------------")
     print(f"Total Time  : {total_time:.6e} s")
-    print(f"Total Elems : {num_elems}")
     print("-------------------------------------")
-
-    # Plot Results
-    plot_result(L, num_nodes, num_elems, steady_state_soln)
