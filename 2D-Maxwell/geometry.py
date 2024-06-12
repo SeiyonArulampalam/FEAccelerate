@@ -6,7 +6,7 @@ from tabulate import tabulate
 from numba import njit
 
 """
- --------------------------------------------------------
++ ------------------------------------------------------ +
 |                                  (magnet 2)            |                  
 |        (magnet 1)                  -------             |
 |           ----      d1       d2   |       |            |
@@ -14,7 +14,7 @@ from numba import njit
 |           ----                     -------             |
 |             l1                       l2                |
 |                                                        |
- --------------------------------------------------------
++ ------------------------------------------------------ +
                             B
 """
 
@@ -271,11 +271,9 @@ if __name__ == "__main__":
         )
         tf_mesh_prop = time.perf_counter()
 
-        # Print out timed sections
+        # save times to list
         time_gmsh = tf_mesh - t0_mesh
         time_mesh_prop = tf_mesh_prop - t0_mesh_prop
-
-        # save times to list
         mesh_time_arr.append(time_gmsh)
         prop_time_arr.append(time_mesh_prop)
 
