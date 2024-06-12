@@ -26,7 +26,7 @@ def create_mesh(
     l2=30,
     d1=50,
     d2=30,
-    lc=1,
+    lc=5,
     flag=False,
 ):
     """
@@ -137,12 +137,22 @@ def create_mesh(
 
 
 @njit
-def get_mesh_props(nodeTags, xyz_nodeCoords, elemTags, elemNodeTags):
-    # ! Reshape in the mesh generation function
-    # Reshape nodeCoords to [x,y,z]
-    # xyz_nodeCoords = nodeCoords.reshape((-1, 3))
-    # elemNodeTags = elemNodeTags.reshape((-1, 3))  # reshape the elemNodeTags
-
+def get_mesh_props(
+    nodeTags,
+    xyz_nodeCoords,
+    elemTags,
+    elemNodeTags,
+    l1,
+    l2,
+    d1,
+    d2,
+    mu_r_mag=1.04,
+    magnetization=1e6,
+):
+    """
+    Create the conectivity array for the mesh
+    python element # | gmsh element tag | n1 | n2 | n3 | Material | Magnetization
+    """
     # Initialize numpy array to hold [node tag, x, y, x]
     # Each row correponds to a node from the mesh
     # Note: you must subtract 1 when using this mapping
@@ -163,19 +173,22 @@ def get_mesh_props(nodeTags, xyz_nodeCoords, elemTags, elemNodeTags):
     # Initialize numpy array that maps the gmsh node tag to start at 1.
     # Note that the new ordering starts at value of 1
     # (human indexed for the tags)
-    connectivity_array = np.zeros((len(elemTags), 5))
+    connectivity_array = np.zeros((len(elemTags), 7))
     for i in range(len(elemTags)):
         tag_i = int(elemTags[i])  # extract the gmsh node tag
         n1 = int(elemNodeTags[i, 0])  # gmsh node 1 tag
         n2 = int(elemNodeTags[i, 1])  # gmsh node 2 tag
         n3 = int(elemNodeTags[i, 2])  # gmsh node 3 tag
 
+        # node 1 x and y coords
         n1_x = map_node_tag_to_xyz[n1 - 1][1]
         n1_y = map_node_tag_to_xyz[n1 - 1][2]
 
+        # node 2 x and y coords
         n2_x = map_node_tag_to_xyz[n2 - 1][1]
         n2_y = map_node_tag_to_xyz[n2 - 1][2]
 
+        # node 3 and y coords
         n3_x = map_node_tag_to_xyz[n3 - 1][1]
         n3_y = map_node_tag_to_xyz[n3 - 1][2]
 
@@ -183,6 +196,22 @@ def get_mesh_props(nodeTags, xyz_nodeCoords, elemTags, elemNodeTags):
         area_e = 0.5 * (
             n1_x * (n2_y - n3_y) + n2_x * (n3_y - n1_y) + n3_x * (n1_y - n2_y)
         )
+
+        # compute the centroid of each element
+        x_center = (n1_x + n2_x + n3_x) * (1 / 3.0)
+        y_center = (n1_y + n2_y + n3_y) * (1 / 3.0)
+
+        # Check if element is located inside region of magnet of magnet 1
+        if -l1 - d1 <= x_center <= -d1 and -0.5 * l1 <= y_center <= 0.5 * l1:
+            # Inside permanent magnet 1
+            connectivity_array[i, 5] = mu_r_mag
+            connectivity_array[i, 6] = magnetization
+
+        # Check if element is located inside region of magnet of magnet 1
+        elif d2 <= x_center <= d2 + l2 and -0.5 * l2 <= y_center <= 0.5 * l2:
+            # Inside permanent magnet 2
+            connectivity_array[i, 5] = mu_r_mag
+            connectivity_array[i, 6] = -magnetization
 
         # Ensure all elements are correctly oriented
         if area_e < 0:
@@ -202,28 +231,59 @@ def get_mesh_props(nodeTags, xyz_nodeCoords, elemTags, elemNodeTags):
 
 
 if __name__ == "__main__":
-    # Generate the mesh using GMSH
-    t0_mesh = time.perf_counter()
-    nodeTags, xyz_nodeCoords, elemTags, elemNodeTags = create_mesh()
-    tf_mesh = time.perf_counter()
+    # Define geometry of the model
+    B = 200
+    H = 100
+    l1 = 20
+    l2 = 30
+    d1 = 50
+    d2 = 30
+    lc = 80
 
-    # Create the connectivity array
-    t0_mesh_prop = time.perf_counter()
-    connectivity_array = get_mesh_props(
-        nodeTags=nodeTags,
-        xyz_nodeCoords=xyz_nodeCoords,
-        elemTags=elemTags,
-        elemNodeTags=elemNodeTags,
-    )
-    tf_mesh_prop = time.perf_counter()
+    mesh_time_arr = []
+    prop_time_arr = []
+    for i in range(6):
+        # Generate the mesh using GMSH
+        t0_mesh = time.perf_counter()
+        nodeTags, xyz_nodeCoords, elemTags, elemNodeTags = create_mesh(
+            B + B,
+            H + H,
+            l1=l1,
+            l2=l2,
+            d1=d1,
+            d2=d2,
+            lc=lc,
+            flag=False,
+        )
+        tf_mesh = time.perf_counter()
 
-    # Print out timed sections
-    time_gmsh = tf_mesh - t0_mesh
-    time_mesh_prop = tf_mesh_prop - t0_mesh_prop
+        # Create the connectivity array
+        t0_mesh_prop = time.perf_counter()
+        connectivity_array = get_mesh_props(
+            nodeTags=nodeTags,
+            xyz_nodeCoords=xyz_nodeCoords,
+            elemTags=elemTags,
+            elemNodeTags=elemNodeTags,
+            l1=l1,
+            l2=l2,
+            d1=d1,
+            d2=d2,
+        )
+        tf_mesh_prop = time.perf_counter()
 
-    # headers = ["Section", "Time (s)"]
-    # table = [
-    #     ["GMSH", time_gmsh],
-    #     ["Mesh Prop.", time_mesh_prop],
-    # ]
-    # print(tabulate(table, headers, tablefmt="fancy_outline"))
+        # Print out timed sections
+        time_gmsh = tf_mesh - t0_mesh
+        time_mesh_prop = tf_mesh_prop - t0_mesh_prop
+
+        # save times to list
+        mesh_time_arr.append(time_gmsh)
+        prop_time_arr.append(time_mesh_prop)
+
+    print(f"Total Number of Nodes : {len(nodeTags)}")
+    print(f"Total Number of Elements : {len(elemTags)}")
+    headers = ["Section", "1", "2", "3", "4", "5", "6"]
+    table = [
+        ["GMSH"] + mesh_time_arr,
+        ["Mesh Prop."] + prop_time_arr,
+    ]
+    print(tabulate(table, headers, tablefmt="fancy_outline"))
