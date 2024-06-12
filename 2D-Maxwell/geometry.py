@@ -322,9 +322,12 @@ def _generate_connectivity_array(
 
 
 if __name__ == "__main__":
+    # Start timer
     t0 = time.time()
 
-    # Define computation method: cpu or gpu. Note that cpu automatically runs with jit
+    # Define computation method: cpu or gpu.
+    #   -> cpu runs jit
+    #   -> gpu runs jit.cuda
     compute_method = "cpu"
 
     # Define geometry of the model
@@ -356,6 +359,7 @@ if __name__ == "__main__":
         tf_mesh = time.perf_counter()
 
         if compute_method == "cpu":
+            """Compute the connectivity array using jit on CPU"""
             # Create the connectivity array
             t0_mesh_prop = time.perf_counter()
             connectivity_array = get_mesh_props(
@@ -371,30 +375,31 @@ if __name__ == "__main__":
             tf_mesh_prop = time.perf_counter()
 
         elif compute_method == "gpu":
+            """Compute the connectivity array using the GPU"""
             t0_mesh_prop = time.perf_counter()
 
-            # initialize variables for connectivity array
+            # Initialize variables for connectivity array
             map_node_tag_to_xyz = np.zeros((len(nodeTags), 4))
             connectivity_array = np.zeros((len(elemTags), 7))
 
-            # get the node mapping array
+            # Get the node mapping array
             map_node_tag_to_xyz = _map_node_to_xyz(
                 nodeTags,
                 xyz_nodeCoords,
                 map_node_tag_to_xyz,
             )
 
-            # send variables to gpu (device memory)
+            # Send variables to gpu (device memory)
             map_node_tag_to_xyz_gpu = cuda.to_device(map_node_tag_to_xyz)
             connectivity_array_gpu = cuda.to_device(connectivity_array)
             elemTags_gpu = cuda.to_device(elemTags)
             elemNodeTags_gpu = cuda.to_device(elemNodeTags)
 
-            # define kernel execution parameters
+            # Define kernel execution parameters
             threadsperblock = 16
             blockspergrid = (len(elemTags) + (threadsperblock - 1)) // threadsperblock
 
-            # execute cuda kernel
+            # Execute cuda kernel
             _generate_connectivity_array[blockspergrid, threadsperblock](
                 map_node_tag_to_xyz_gpu,
                 connectivity_array_gpu,
@@ -407,13 +412,12 @@ if __name__ == "__main__":
                 mu_r_mag,
                 magnetization,
             )
-            # send back solution to the cpu (host)
+            # Send back solution to the cpu (host)
             connectivity_array = connectivity_array_gpu.copy_to_host()
 
             tf_mesh_prop = time.perf_counter()
 
-
-        # save times to list
+        # Save times to list
         time_gmsh = tf_mesh - t0_mesh
         time_mesh_prop = tf_mesh_prop - t0_mesh_prop
         mesh_time_arr.append(time_gmsh)
