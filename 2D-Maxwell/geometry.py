@@ -3,7 +3,7 @@ import sys
 import numpy as np
 import time
 from tabulate import tabulate
-from numba import njit
+from numba import njit, cuda
 
 """
 + ------------------------------------------------------ +
@@ -230,7 +230,103 @@ def get_mesh_props(
     return connectivity_array
 
 
+@njit
+def _map_node_to_xyz(nodeTags, xyz_nodeCoords, map_node_tag_to_xyz):
+    for i in range(len(nodeTags)):
+        tag_i = nodeTags[i]
+        x_i = xyz_nodeCoords[i, 0]  # x coord
+        y_i = xyz_nodeCoords[i, 1]  # y coord
+        z_i = xyz_nodeCoords[i, 2]  # z coord
+
+        # Update the array that maps node tag to xyz coord
+        map_node_tag_to_xyz[i, 0] = tag_i
+        map_node_tag_to_xyz[i, 1] = x_i
+        map_node_tag_to_xyz[i, 2] = y_i
+        map_node_tag_to_xyz[i, 3] = z_i
+    return map_node_tag_to_xyz
+
+
+@cuda.jit
+def _generate_connectivity_array(
+    map_node_tag_to_xyz,
+    connectivity_array,
+    elemTags,
+    elemNodeTags,
+    l1,
+    l2,
+    d1,
+    d2,
+    mu_r_mag,
+    magnetization,
+):
+    # get the thread Id
+    idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+
+    # get the stride length (cuda.blockIdx.x * cuda.gridDim.x)
+    stride = cuda.gridsize(1)
+
+    for i in range(idx, len(elemTags), stride):
+        tag_i = int(elemTags[i])  # extract the gmsh node tag
+        n1 = int(elemNodeTags[i, 0])  # gmsh node 1 tag
+        n2 = int(elemNodeTags[i, 1])  # gmsh node 2 tag
+        n3 = int(elemNodeTags[i, 2])  # gmsh node 3 tag
+
+        # node 1 x and y coords
+        n1_x = map_node_tag_to_xyz[n1 - 1][1]
+        n1_y = map_node_tag_to_xyz[n1 - 1][2]
+
+        # node 2 x and y coords
+        n2_x = map_node_tag_to_xyz[n2 - 1][1]
+        n2_y = map_node_tag_to_xyz[n2 - 1][2]
+
+        # node 3 and y coords
+        n3_x = map_node_tag_to_xyz[n3 - 1][1]
+        n3_y = map_node_tag_to_xyz[n3 - 1][2]
+
+        # compute the area of each element
+        area_e = 0.5 * (
+            n1_x * (n2_y - n3_y) + n2_x * (n3_y - n1_y) + n3_x * (n1_y - n2_y)
+        )
+
+        # compute the centroid of each element
+        x_center = (n1_x + n2_x + n3_x) * (1 / 3.0)
+        y_center = (n1_y + n2_y + n3_y) * (1 / 3.0)
+
+        # Check if element is located inside region of magnet of magnet 1
+        if -l1 - d1 <= x_center <= -d1 and -0.5 * l1 <= y_center <= 0.5 * l1:
+            # Inside permanent magnet 1
+            connectivity_array[i, 5] = mu_r_mag
+            connectivity_array[i, 6] = magnetization
+
+        # Check if element is located inside region of magnet of magnet 1
+        elif d2 <= x_center <= d2 + l2 and -0.5 * l2 <= y_center <= 0.5 * l2:
+            # Inside permanent magnet 2
+            connectivity_array[i, 5] = mu_r_mag
+            connectivity_array[i, 6] = -magnetization
+
+        # Ensure all elements are correctly oriented
+        if area_e < 0:
+            connectivity_array[i, 0] = i
+            connectivity_array[i, 1] = tag_i
+            connectivity_array[i, 4] = n1
+            connectivity_array[i, 3] = n2
+            connectivity_array[i, 2] = n3
+        else:
+            connectivity_array[i, 0] = i
+            connectivity_array[i, 1] = tag_i
+            connectivity_array[i, 2] = n1
+            connectivity_array[i, 3] = n2
+            connectivity_array[i, 4] = n3
+
+    cuda.syncthreads()
+
+
 if __name__ == "__main__":
+    t0 = time.time()
+
+    # Define computation method: cpu or gpu. Note that cpu automatically runs with jit
+    compute_method = "cpu"
+
     # Define geometry of the model
     B = 200
     H = 100
@@ -238,11 +334,13 @@ if __name__ == "__main__":
     l2 = 30
     d1 = 50
     d2 = 30
-    lc = 80
+    lc = 10
+    mu_r_mag = 1.04
+    magnetization = 1e6
 
     mesh_time_arr = []
     prop_time_arr = []
-    for i in range(6):
+    for i in range(10):
         # Generate the mesh using GMSH
         t0_mesh = time.perf_counter()
         nodeTags, xyz_nodeCoords, elemTags, elemNodeTags = create_mesh(
@@ -257,19 +355,63 @@ if __name__ == "__main__":
         )
         tf_mesh = time.perf_counter()
 
-        # Create the connectivity array
-        t0_mesh_prop = time.perf_counter()
-        connectivity_array = get_mesh_props(
-            nodeTags=nodeTags,
-            xyz_nodeCoords=xyz_nodeCoords,
-            elemTags=elemTags,
-            elemNodeTags=elemNodeTags,
-            l1=l1,
-            l2=l2,
-            d1=d1,
-            d2=d2,
-        )
-        tf_mesh_prop = time.perf_counter()
+        if compute_method == "cpu":
+            # Create the connectivity array
+            t0_mesh_prop = time.perf_counter()
+            connectivity_array = get_mesh_props(
+                nodeTags=nodeTags,
+                xyz_nodeCoords=xyz_nodeCoords,
+                elemTags=elemTags,
+                elemNodeTags=elemNodeTags,
+                l1=l1,
+                l2=l2,
+                d1=d1,
+                d2=d2,
+            )
+            tf_mesh_prop = time.perf_counter()
+
+        elif compute_method == "gpu":
+            t0_mesh_prop = time.perf_counter()
+
+            # initialize variables for connectivity array
+            map_node_tag_to_xyz = np.zeros((len(nodeTags), 4))
+            connectivity_array = np.zeros((len(elemTags), 7))
+
+            # get the node mapping array
+            map_node_tag_to_xyz = _map_node_to_xyz(
+                nodeTags,
+                xyz_nodeCoords,
+                map_node_tag_to_xyz,
+            )
+
+            # send variables to gpu (device memory)
+            map_node_tag_to_xyz_gpu = cuda.to_device(map_node_tag_to_xyz)
+            connectivity_array_gpu = cuda.to_device(connectivity_array)
+            elemTags_gpu = cuda.to_device(elemTags)
+            elemNodeTags_gpu = cuda.to_device(elemNodeTags)
+
+            # define kernel execution parameters
+            threadsperblock = 16
+            blockspergrid = (len(elemTags) + (threadsperblock - 1)) // threadsperblock
+
+            # execute cuda kernel
+            _generate_connectivity_array[blockspergrid, threadsperblock](
+                map_node_tag_to_xyz_gpu,
+                connectivity_array_gpu,
+                elemTags_gpu,
+                elemNodeTags_gpu,
+                l1,
+                l2,
+                d1,
+                d2,
+                mu_r_mag,
+                magnetization,
+            )
+            # send back solution to the cpu (host)
+            connectivity_array = connectivity_array_gpu.copy_to_host()
+
+            tf_mesh_prop = time.perf_counter()
+
 
         # save times to list
         time_gmsh = tf_mesh - t0_mesh
@@ -277,8 +419,11 @@ if __name__ == "__main__":
         mesh_time_arr.append(time_gmsh)
         prop_time_arr.append(time_mesh_prop)
 
+    tf = time.time()
+
     print(f"Total Number of Nodes : {len(nodeTags)}")
     print(f"Total Number of Elements : {len(elemTags)}")
+    print(f"Total Time = {tf-t0:.4f} s")
     headers = ["Section", "1", "2", "3", "4", "5", "6"]
     table = [
         ["GMSH"] + mesh_time_arr,
