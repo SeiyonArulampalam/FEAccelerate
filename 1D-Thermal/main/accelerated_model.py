@@ -5,9 +5,10 @@ import time
 from numba import njit, cuda
 import torch
 from scipy import sparse
-import cupy
-import cupyx.scipy.sparse.linalg as cpssl
-from cupyx.scipy.sparse import csr_matrix
+
+# import cupy
+# import cupyx.scipy.sparse.linalg as cpssl
+# from cupyx.scipy.sparse import csr_matrix, csc_matrix
 
 
 np.set_printoptions(precision=4)
@@ -288,7 +289,7 @@ if __name__ == "__main__":
         "--assemble",
         type=str,
         help="Choose between jit and cuda to assemble Kx = F.",
-        default="cuda",
+        default="jit",
     )
     parser.add_argument(
         "-n",
@@ -301,8 +302,8 @@ if __name__ == "__main__":
         "-s",
         "--solver",
         type=str,
-        help="Select cupy, cupyx, torch, or numpy to solve system of equations.",
-        default="cupyx",
+        help="Select cupy, cupyx_spsolve, torch, or numpy to solve system of equations.",
+        default="scipy",
     )
     args = parser.parse_args()
     assemble_parsed = args.assemble
@@ -310,7 +311,7 @@ if __name__ == "__main__":
     solver_parsed = args.solver
 
     print("-------------------------------------")
-    print(cuda.detect())
+    # print(cuda.detect())
     print("-------------------------------------")
 
     print("\n-----------------------------------")
@@ -451,24 +452,7 @@ if __name__ == "__main__":
         """Solve system of Equations"""
         start_solve = time.perf_counter()  # start timer
 
-        if solver_parsed == "cupy":
-            """Solve system of equation using cupy"""
-            K_gpu = cupy.asarray(K_global)  # send K_global to gpu
-            F_gpu = cupy.asarray(F_global)  # send F_global to gpu
-            soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
-
-            # send back the GPU solution to the CPU
-            steady_state_soln = cupy.asnumpy(soln_gpu)
-
-        elif solver_parsed == "cupyx":
-            """Solve system of equations using cupyx"""
-            K_gpu = cupy.asarray(K_global)  # send K_global to gpu
-            K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
-            F_gpu = cupy.asarray(F_global)  # send F_global to gpu
-            soln = cpssl.spsolve(K_csc_gpu, F_gpu)  # solve using spsolve
-            steady_state_soln = soln.get()  # send soln back to host
-
-        elif solver_parsed == "torch":
+        if solver_parsed == "torch":
             """Solve system of equation using torch"""
             steady_state_soln = torch.linalg.solve(
                 torch.from_numpy(K_global), torch.from_numpy(F_global)
@@ -477,6 +461,49 @@ if __name__ == "__main__":
         elif solver_parsed == "numpy":
             """Solve system of equation using numpy"""
             steady_state_soln = np.linalg.solve(K_global, F_global)
+
+        elif solver_parsed == "scipy":
+            """Solve system of equations using scipy"""
+            K_csc = sparse.csc_array(K_global)
+            ilu = sparse.linalg.spilu(K_csc)
+            Mx = lambda x: ilu.solve(x)
+            M = sparse.linalg.LinearOperator((len(F_global), len(F_global)), Mx)
+            steady_state_soln, info = sparse.linalg.gmres(
+                A=K_csc,
+                b=F_global,
+                M=M,
+                maxiter=200,
+            )
+            if info == 1:
+                raise ValueError("gmres failed to converge in 200 iterations")
+
+        # elif solver_parsed == "cupy":
+        #     """Solve system of equation using cupy"""
+        #     K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+        #     F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+        #     soln_gpu = cupy.linalg.solve(K_gpu, F_gpu)  # solve using cupy kernel
+
+        #     # send back the GPU solution to the CPU
+        #     steady_state_soln = cupy.asnumpy(soln_gpu)
+
+        # elif solver_parsed == "cupyx_spsolve":
+        #     """Solve system of equations using cupyx spsolve"""
+        #     K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+        #     K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
+        #     F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+        #     soln = cpssl.spsolve(K_csc_gpu, F_gpu)  # solve using spsolve
+        #     steady_state_soln = soln.get()  # send soln back to host
+
+        # elif solver_parsed == "cupyx_gmres":
+        #     """Solve system of equations using cupyx gmres"""
+        #     K_gpu = cupy.asarray(K_global)  # send K_global to gpu
+        #     K_csc_gpu = csc_matrix(K_gpu)  # convert K to a csc matrix
+        #     F_gpu = cupy.asarray(F_global)  # send F_global to gpu
+        #     ilu = cpssl.spilu(K_csc)
+        #     Mx = lambda x: ilu.solve(x)
+        #     M = cpssl.LinearOperator((len(F_gpu), len(F_gpu)), Mx)
+        #     soln_gpu, info = cpssl.gmres(A=K_csc_gpu, b=F_gpu, M=M, maxiter = 500)
+        #     steady_state_soln = soln.get()  # send soln back to host
 
         end_solve = time.perf_counter()  # end timer
         total_time_solve = end_solve - start_solve
