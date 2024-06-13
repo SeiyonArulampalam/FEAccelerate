@@ -252,6 +252,7 @@ def _generate_connectivity_array(
     connectivity_array,
     elemTags,
     elemNodeTags,
+    numElems,
     l1,
     l2,
     d1,
@@ -265,7 +266,7 @@ def _generate_connectivity_array(
     # get the stride length (cuda.blockIdx.x * cuda.gridDim.x)
     stride = cuda.gridsize(1)
 
-    for i in range(idx, len(elemTags), stride):
+    for i in range(idx, numElems, stride):
         tag_i = int(elemTags[i])  # extract the gmsh node tag
         n1 = int(elemNodeTags[i, 0])  # gmsh node 1 tag
         n2 = int(elemNodeTags[i, 1])  # gmsh node 2 tag
@@ -358,6 +359,9 @@ if __name__ == "__main__":
         )
         tf_mesh = time.perf_counter()
 
+        numNodes = len(nodeTags)
+        numElems = len(elemTags)
+
         if compute_method == "cpu":
             """Compute the connectivity array using jit on CPU"""
             # Create the connectivity array
@@ -405,6 +409,7 @@ if __name__ == "__main__":
                 connectivity_array_gpu,
                 elemTags_gpu,
                 elemNodeTags_gpu,
+                numElems,
                 l1,
                 l2,
                 d1,
