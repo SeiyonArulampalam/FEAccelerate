@@ -7,6 +7,7 @@ import geometry as gm
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import matplotlib as mpl
+from rich.console import Console
 
 np.set_printoptions(precision=4, linewidth=200)
 
@@ -48,7 +49,7 @@ def contour_mpl(xyz_nodeCoords, z, title="fig", fname="contour.jpg", flag=False)
     # Defin colormap
     # cmap = cmasher.guppy_r
     cmap = "coolwarm"
-    # cmap = "jet"
+    cmap = "jet"
 
     # Plot solution
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
@@ -306,7 +307,7 @@ if __name__ == "__main__":
     print(f"Total Number of Nodes : {len(nodeTags)}")
     print(f"Total Number of Elements : {len(elemTags)}")
     print(f"Total Time = {tf-t0:.4f} s")
-    headers = ["Section", "1", "2", "3", "4", "5", "6"]
+    headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
     table = [
         ["GMSH"] + mesh_time_arr,
         ["Mesh Prop."] + prop_time_arr,
@@ -315,4 +316,9 @@ if __name__ == "__main__":
         ["Apply BC"] + applyBC_time_arr,
         ["Solve Time"] + solve_time_arr,
     ]
-    print(tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"))
+
+    console = Console()
+    console.print(
+        tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
+        style="bold yellow",
+    )
