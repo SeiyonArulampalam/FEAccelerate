@@ -27,6 +27,7 @@ def create_mesh(
     d1=50,
     d2=30,
     lc=5,
+    lc1=5,
     flag=False,
 ):
     """
@@ -61,16 +62,16 @@ def create_mesh(
     prob.addPoint(-B / 2, H / 2, 0, lc, 4)
 
     # Define points for magnet 1
-    prob.addPoint(-d1 - l1, -l1 / 2, 0, lc, 5)
-    prob.addPoint(-d1, -l1 / 2, 0, lc, 6)
-    prob.addPoint(-d1, l1 / 2, 0, lc, 7)
-    prob.addPoint(-d1 - l1, l1 / 2, 0, lc, 8)
+    prob.addPoint(-d1 - l1, -l1 / 2, 0, lc1, 5)
+    prob.addPoint(-d1, -l1 / 2, 0, lc1, 6)
+    prob.addPoint(-d1, l1 / 2, 0, lc1, 7)
+    prob.addPoint(-d1 - l1, l1 / 2, 0, lc1, 8)
 
     # Define points for magnet 2
-    prob.addPoint(d2, -l2 / 2, 0, lc, 9)
-    prob.addPoint(d2 + l2, -l2 / 2, 0, lc, 10)
-    prob.addPoint(d2 + l2, l2 / 2, 0, lc, 11)
-    prob.addPoint(d2, l2 / 2, 0, lc, 12)
+    prob.addPoint(d2, -l2 / 2, 0, lc1, 9)
+    prob.addPoint(d2 + l2, -l2 / 2, 0, lc1, 10)
+    prob.addPoint(d2 + l2, l2 / 2, 0, lc1, 11)
+    prob.addPoint(d2, l2 / 2, 0, lc1, 12)
 
     # Draw lines that define the outter boundary
     prob.addLine(1, 2, 1)
@@ -213,6 +214,9 @@ def get_mesh_props(
             connectivity_array[i, 5] = mu_r_mag
             connectivity_array[i, 6] = -magnetization
 
+        else:
+            connectivity_array[i, 5] = 1.0  # air region
+
         # Ensure all elements are correctly oriented
         if area_e < 0:
             connectivity_array[i, 0] = i
@@ -339,6 +343,7 @@ if __name__ == "__main__":
     d1 = 50
     d2 = 30
     lc = 10
+    lc1 = 10
     mu_r_mag = 1.04
     magnetization = 1e6
 
@@ -355,6 +360,7 @@ if __name__ == "__main__":
             d1=d1,
             d2=d2,
             lc=lc,
+            lc1=lc1,
             flag=False,
         )
         tf_mesh = time.perf_counter()
