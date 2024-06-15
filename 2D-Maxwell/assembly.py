@@ -320,7 +320,7 @@ def applyDirichletBC(nodes_BC, K, b):
 if __name__ == "__main__":
     # Set FEA settings
     assembly = "cpu"
-    solver = "scipy-gmres"
+    solver = "numpy-solve"
     
     # Print Model Settings Out
     print(assembly, "\n")
@@ -346,7 +346,7 @@ if __name__ == "__main__":
     getBC_time_arr = []
     applyBC_time_arr = []
     solve_time_arr = []
-    for i in range(6):
+    for i in range(20):
         """Generate the mesh and create the connectivity arrays"""
         # Generate the mesh using GMSH
         t0_mesh = time.perf_counter()
@@ -488,7 +488,7 @@ if __name__ == "__main__":
         elif solver == "cupyx-spsolve":
             """Solve system of equations using cupyx spsolve"""
             K_gpu = cp.asarray(K_sys)  # send K_global to gpu
-            K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
+            K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csr matrix
             b_gpu = cp.asarray(b_sys)  # send F_global to gpu
             soln = cpssl.spsolve(K_csc_gpu, b_gpu)  # solve using spsolve
             x = soln.get()  # send soln back to host
@@ -496,7 +496,7 @@ if __name__ == "__main__":
         tf_solve = time.perf_counter()
 
         """Plot solution field"""
-        contour_mpl(xyz_nodeCoords, x, title = assembly + f" {i}", fname = assembly+".jpg", flag=True)
+        # contour_mpl(xyz_nodeCoords, x, title = assembly + f" {i}", fname = assembly+".jpg", flag=True)
         # plt.show()
         # exit()
 
@@ -520,18 +520,37 @@ if __name__ == "__main__":
     print(f"Total Number of Nodes : {len(nodeTags)}")
     print(f"Total Number of Elements : {len(elemTags)}")
     print(f"Total Time = {tf-t0:.4f} s")
-    headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
-    table = [
-        ["GMSH"] + mesh_time_arr,
-        ["Mesh Prop."] + prop_time_arr,
-        ["Kx = b"] + sys_time_arr,
-        ["Get BCs Nodes"] + getBC_time_arr,
-        ["Apply BC"] + applyBC_time_arr,
-        ["Solve Time"] + solve_time_arr,
-    ]
+    # headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
+    # table = [
+    #     ["GMSH"] + mesh_time_arr,
+    #     ["Mesh Prop."] + prop_time_arr,
+    #     ["Kx = b"] + sys_time_arr,
+    #     ["Get BCs Nodes"] + getBC_time_arr,
+    #     ["Apply BC"] + applyBC_time_arr,
+    #     ["Solve Time"] + solve_time_arr,
+    # ]
+    # console = Console()
+    # console.print(
+    #     tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
+    #     style="bold yellow",
+    # ) 
+      
+    stats = {
+        "GMSH" : mesh_time_arr,
+        "Mesh Prop." : prop_time_arr,
+        "Kx = b" : sys_time_arr,
+        "Get BC Nodes" : getBC_time_arr,
+        "Apply BC" : applyBC_time_arr,
+        "Solver" : solve_time_arr,
+    }
 
     console = Console()
     console.print(
-        tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
-        style="bold yellow",
+        tabulate(stats, 
+                 headers = "keys",
+                 tablefmt="fancy_outline", 
+                 floatfmt="3e",
+                 showindex="always"
+        ),
+        style="grey74",
     )
