@@ -61,7 +61,7 @@ def contour_mpl(xyz_nodeCoords, z, title="fig", fname="contour.jpg", flag=False)
     plot = ax.tricontour(tri, z, levels=levels, cmap=cmap)
     plot = ax.tricontourf(tri, z, levels=levels, cmap=cmap)
     # ax.set_aspect("equal", adjustable="box")
-    # ax.set_title(title, fontsize=10)
+    ax.set_title(title, fontsize=10)
 
     norm = mpl.colors.Normalize(vmin=min_level, vmax=max_level)
     cbar = fig.colorbar(
@@ -318,6 +318,13 @@ def applyDirichletBC(nodes_BC, K, b):
 
 
 if __name__ == "__main__":
+    # Set FEA settings
+    assembly = "cpu"
+    solver = "scipy-gmres"
+    
+    # Print Model Settings Out
+    print(assembly, "\n")
+
     # Start timer
     t0 = time.time()
 
@@ -329,7 +336,7 @@ if __name__ == "__main__":
     d1 = 30
     d2 = 30
     lc = 5
-    lc1 = 1
+    lc1 = 0.5
     mu_r_mag = 1.04
     magnetization = 1e6
 
@@ -358,9 +365,6 @@ if __name__ == "__main__":
 
         numNodes = len(nodeTags)
         numElems = len(elemTags)
-        print("Nodes : ", numNodes)
-        print("Elems : ", numElems)
-        # exit()
 
         # Create the connectivity array
         t0_mesh_prop = time.perf_counter()
@@ -377,69 +381,65 @@ if __name__ == "__main__":
         tf_mesh_prop = time.perf_counter()
 
         """Assemble K and b"""
-        t0_sys = time.perf_counter()
+        if assembly == "cpu":
+            """ CPU implementation of Kx = b """
+            K = np.zeros((numNodes, numNodes))
+            b = np.zeros(numNodes)
+            t0_sys = time.perf_counter() 
+            K_sys, b_sys = assemble_K_and_b_standard(
+                K,
+                b,
+                connectivity_array,
+                xyz_nodeCoords,
+                numElems,
+            )
+            tf_sys = time.perf_counter()
 
-        # CPU implementation of Kx = b
-        print("CPU")
-        K = np.zeros((numNodes, numNodes))
-        b = np.zeros(numNodes)
-        K_np, b_np = assemble_K_and_b_standard(
-            K,
-            b,
-            connectivity_array,
-            xyz_nodeCoords,
-            numElems,
-        )
+        
+        elif assembly == "gpu":
+            """GPU implementation of Kx = b"""
+            K_rows = np.zeros(numElems * 9)
+            K_cols = np.zeros(numElems * 9)
+            K_data = np.zeros(numElems * 9)
+            # K = np.zeros((numNodes, numNodes))
+            b = np.zeros(numNodes)
+            # K_gpu = cuda.to_device(K)
+            K_rows_gpu = cuda.to_device(K_rows)
+            K_cols_gpu = cuda.to_device(K_cols)
+            K_data_gpu = cuda.to_device(K_data)
 
-        # GPU implementation of Kx = b
-        print("\nGPU")
-        K_rows = np.zeros(numElems * 9)
-        K_cols = np.zeros(numElems * 9)
-        K_data = np.zeros(numElems * 9)
-        # K = np.zeros((numNodes, numNodes))
-        b = np.zeros(numNodes)
-        # K_gpu = cuda.to_device(K)
-        K_rows_gpu = cuda.to_device(K_rows)
-        K_cols_gpu = cuda.to_device(K_cols)
-        K_data_gpu = cuda.to_device(K_data)
+            b_gpu = cuda.to_device(b)
+            connectivity_array_gpu = cuda.to_device(connectivity_array)
+            xyz_nodeCoords_gpu = cuda.to_device(xyz_nodeCoords)
 
-        b_gpu = cuda.to_device(b)
-        connectivity_array_gpu = cuda.to_device(connectivity_array)
-        xyz_nodeCoords_gpu = cuda.to_device(xyz_nodeCoords)
+            # Define kernel executino parameters
+            threadsperblock = 32
+            blockspergrid = (numNodes + (threadsperblock - 1)) // threadsperblock
 
-        # Define kernel executino parameters
-        threadsperblock = 32
-        blockspergrid = (numNodes + (threadsperblock - 1)) // threadsperblock
+            t0_sys = time.perf_counter()
+            _assemble_K_and_b[blockspergrid, threadsperblock](
+                K_rows_gpu,
+                K_cols_gpu,
+                K_data_gpu,
+                b_gpu,
+                connectivity_array_gpu,
+                xyz_nodeCoords_gpu,
+            )
+            tf_sys = time.perf_counter()
+            
+            cuda.synchronize()
 
-        _assemble_K_and_b[blockspergrid, threadsperblock](
-            K_rows_gpu,
-            K_cols_gpu,
-            K_data_gpu,
-            b_gpu,
-            connectivity_array_gpu,
-            xyz_nodeCoords_gpu,
-        )
+            # Send back the matrix from GPU to CPU
+            K_rows = K_rows_gpu.copy_to_host()
+            K_cols = K_cols_gpu.copy_to_host()
+            K_data = K_data_gpu.copy_to_host()
 
-        # # Send back the matrix from GPU to CPU
-        K_rows = K_rows_gpu.copy_to_host()
-        K_cols = K_cols_gpu.copy_to_host()
-        K_data = K_data_gpu.copy_to_host()
-
-        # print(K_cols)
-
-        K_cp = sparse.coo_matrix(
-            (K_data, (K_rows, K_cols)), shape=(numNodes, numNodes)
-        ).toarray()
-
-        b_cp = b_gpu.copy_to_host()
-
-        # cuda.synchronize()
-
-        tf_sys = time.perf_counter()
-
-        print("K close? ", np.allclose(K_cp, K_np))
-        print("b close? ", np.allclose(b_cp, b_np))
-        exit()
+            # Convert system to sparse matrix format
+            K_sys = sparse.coo_matrix(
+                (K_data, (K_rows, K_cols)),
+                shape=(numNodes, numNodes),
+            ).toarray()
+            b_sys = b_gpu.copy_to_host()
 
         """Get nodes on edge of the boundary"""
         t0_getBC = time.perf_counter()
@@ -448,86 +448,90 @@ if __name__ == "__main__":
 
         """Apply Dirichlet BC"""
         t0_applyBC = time.perf_counter()
-        K, b = applyDirichletBC(nodes_BC, K, b)
+        K_sys, b_sys = applyDirichletBC(nodes_BC, K_sys, b_sys)
         tf_applyBC = time.perf_counter()
 
         """Solve System of Equation"""
         t0_solve = time.perf_counter()
 
-        """ Numpy solve """
-        x = np.linalg.solve(K, b)
+        if solver == "numpy-solve":
+            """ Numpy solve """
+            x = np.linalg.solve(K_sys, b_sys)
 
-        """ Scipy solve gmres """
-        # K_csc = sparse.csc_array(K)
-        # ilu = sparse.linalg.spilu(K_csc)
-        # Mx = lambda x: ilu.solve(x)
-        # M = sparse.linalg.LinearOperator((len(b), len(b)), Mx)
-        # x, info = sparse.linalg.gmres(
-        #     A=K_csc,
-        #     b=b,
-        #     M=M,
-        #     rtol=1e-10,
-        #     maxiter=200,
-        # )
-        # if info == 1:
-        #     raise ValueError("gmres failed to converge in 200 iterations")
+        elif solver == "scipy-gmres":
+            """ Scipy solve gmres """
+            K_csc = sparse.csc_array(K_sys)
+            ilu = sparse.linalg.spilu(K_csc)
+            Mx = lambda x: ilu.solve(x)
+            M = sparse.linalg.LinearOperator((len(b_sys), len(b_sys)), Mx)
+            x, info = sparse.linalg.gmres(
+                A=K_csc,
+                b=b_sys,
+                M=M,
+                rtol=1e-10,
+                maxiter=200,
+            )
+            if info == 1:
+                raise ValueError("gmres failed to converge in 200 iterations")
 
-        """ Torch """
-        # x = torch.linalg.solve(torch.from_numpy(K), torch.from_numpy(b))
-
-        """Solve system of equation using cupy"""
-        # K_gpu = cp.asarray(K)  # send K_global to gpu
-        # b_gpu = cp.asarray(b)  # send F_global to gpu
-        # soln_gpu = cp.linalg.solve(K_gpu, b_gpu)  # solve using cupy kernel
-        # # send back the GPU solution to the CPU
-        # x = cp.asnumpy(soln_gpu)
-
-        """Solve system of equations using cupyx spsolve"""
-        # K_gpu = cp.asarray(K)  # send K_global to gpu
-        # K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
-        # b_gpu = cp.asarray(b)  # send F_global to gpu
-        # soln = cpssl.spsolve(K_csc_gpu, b_gpu)  # solve using spsolve
-        # x = soln.get()  # send soln back to host
+        elif solver == "torch":
+            """ Torch """
+            x = torch.linalg.solve(torch.from_numpy(K_sys), torch.from_numpy(b_sys))
+            
+        elif solver == "cupy-solve":
+            """Solve system of equation using cupy"""
+            K_gpu = cp.asarray(K_sys)  # send K_global to gpu
+            b_gpu = cp.asarray(b_sys)  # send F_global to gpu
+            soln_gpu = cp.linalg.solve(K_gpu, b_gpu)  # solve using cupy kernel
+            x = cp.asnumpy(soln_gpu) # send soln back to the host
+            
+        elif solver == "cupyx-spsolve":
+            """Solve system of equations using cupyx spsolve"""
+            K_gpu = cp.asarray(K_sys)  # send K_global to gpu
+            K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
+            b_gpu = cp.asarray(b_sys)  # send F_global to gpu
+            soln = cpssl.spsolve(K_csc_gpu, b_gpu)  # solve using spsolve
+            x = soln.get()  # send soln back to host
 
         tf_solve = time.perf_counter()
 
         """Plot solution field"""
-        contour_mpl(xyz_nodeCoords, x, flag=True)
+        contour_mpl(xyz_nodeCoords, x, title = assembly + f" {i}", fname = assembly+".jpg", flag=True)
         # plt.show()
-        exit()
+        # exit()
 
-        # # Save times to list
-        # time_gmsh = tf_mesh - t0_mesh
-        # time_mesh_prop = tf_mesh_prop - t0_mesh_prop
-        # time_sys = tf_sys - t0_sys
-        # time_getBC = tf_getBC - t0_getBC
-        # time_applyBC = tf_applyBC - t0_applyBC
-        # time_solve = tf_solve - t0_solve
+        # Save times to list
+        time_gmsh = tf_mesh - t0_mesh
+        time_mesh_prop = tf_mesh_prop - t0_mesh_prop
+        time_sys = tf_sys - t0_sys
+        time_getBC = tf_getBC - t0_getBC
+        time_applyBC = tf_applyBC - t0_applyBC
+        time_solve = tf_solve - t0_solve
 
-        # mesh_time_arr.append(time_gmsh)
-        # prop_time_arr.append(time_mesh_prop)
-        # sys_time_arr.append(time_sys)
-        # getBC_time_arr.append(time_getBC)
-        # applyBC_time_arr.append(time_applyBC)
-        # solve_time_arr.append(time_solve)
+        mesh_time_arr.append(time_gmsh)
+        prop_time_arr.append(time_mesh_prop)
+        sys_time_arr.append(time_sys)
+        getBC_time_arr.append(time_getBC)
+        applyBC_time_arr.append(time_applyBC)
+        solve_time_arr.append(time_solve)
 
     tf = time.time()
 
     print(f"Total Number of Nodes : {len(nodeTags)}")
     print(f"Total Number of Elements : {len(elemTags)}")
     print(f"Total Time = {tf-t0:.4f} s")
-    # headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
-    # table = [
-    #     ["GMSH"] + mesh_time_arr,
-    #     ["Mesh Prop."] + prop_time_arr,
-    #     ["Kx = b"] + sys_time_arr,
-    #     ["Get BCs Nodes"] + getBC_time_arr,
-    #     ["Apply BC"] + applyBC_time_arr,
-    #     ["Solve Time"] + solve_time_arr,
-    # ]
+    headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
+    table = [
+        ["GMSH"] + mesh_time_arr,
+        ["Mesh Prop."] + prop_time_arr,
+        ["Kx = b"] + sys_time_arr,
+        ["Get BCs Nodes"] + getBC_time_arr,
+        ["Apply BC"] + applyBC_time_arr,
+        ["Solve Time"] + solve_time_arr,
+    ]
 
-    # console = Console()
-    # console.print(
-    #     tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
-    #     style="bold yellow",
-    # )
+    console = Console()
+    console.print(
+        tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
+        style="bold yellow",
+    )
