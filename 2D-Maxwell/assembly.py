@@ -1,6 +1,6 @@
 from tabulate import tabulate
 import numpy as np
-import scipy as sp
+from scipy import sparse
 from numba import njit, cuda
 import time
 import geometry as gm
@@ -8,8 +8,12 @@ import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import matplotlib as mpl
 from rich.console import Console
+import cupy as cp
+import torch
+import cupyx.scipy.sparse.linalg as cpssl
+from cupyx.scipy.sparse import csr_matrix, csc_matrix
 
-np.set_printoptions(precision=4, linewidth=200)
+np.set_printoptions(precision=4, linewidth=800)
 
 
 def contour_mpl(xyz_nodeCoords, z, title="fig", fname="contour.jpg", flag=False):
@@ -143,6 +147,9 @@ def assemble_K_and_b_standard(K, b, connectivity_array, xyz_nodeCoords, numElems
 
                 K[n_row_e - 1, n_col_e - 1] += K_row_col
 
+                # if e == 0:
+                #     print(n_row_e - 1, n_col_e - 1, K_row_col)
+
         # Update the global b vector
         for row in range(3):
             if magnetization == 0:
@@ -154,6 +161,118 @@ def assemble_K_and_b_standard(K, b, connectivity_array, xyz_nodeCoords, numElems
             n_row_e = int(connectivity_array[e, row + 2])
             b[n_row_e - 1] += b_local
     return K, b
+
+
+@cuda.jit
+def _assemble_K_and_b(
+    K_rows, K_cols, K_data, b_gpu, connectivity_array, xyz_nodeCoords
+):
+    # get the thread Id
+    idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+
+    # get the stride length (cuda.blockIdx.x * cuda.gridDim.x)
+    stride = cuda.blockDim.x * cuda.gridDim.x  # cuda.grid_size(1)
+
+    # print(stride)
+    # exit()
+
+    for e in range(idx, connectivity_array.shape[0], stride):
+        # Extract the material coefficients
+        alpha = connectivity_array[e, 5]
+
+        # Extract the magnetization value for the element
+        magnetization = connectivity_array[e, 6]
+
+        # i, j, m are the global node tags for each element
+        i = int(connectivity_array[e, 2])
+        j = int(connectivity_array[e, 3])
+        m = int(connectivity_array[e, 4])
+
+        # Global location of n(1,element)
+        xi = xyz_nodeCoords[i - 1][0]
+        yi = xyz_nodeCoords[i - 1][1]
+
+        # Global location of n(1,element)
+        xj = xyz_nodeCoords[j - 1][0]
+        yj = xyz_nodeCoords[j - 1][1]
+
+        # Global location of n(1,element)
+        xm = xyz_nodeCoords[m - 1][0]
+        ym = xyz_nodeCoords[m - 1][1]
+
+        # Element coefficients
+        b1_e = yj - ym
+        b2_e = ym - yi
+        b3_e = yi - yj
+
+        c1_e = xm - xj
+        c2_e = xi - xm
+        c3_e = xj - xi
+
+        # area of element
+        area_e = (b1_e * c2_e - b2_e * c1_e) * 0.5
+
+        # Update the global K matrix
+        index = e * 9  # starting index for rows, cols, and data
+        for row in range(3):
+            if row == 0:
+                b_e_row = b1_e
+                c_e_row = c1_e
+            elif row == 1:
+                b_e_row = b2_e
+                c_e_row = c2_e
+            elif row == 2:
+                b_e_row = b3_e
+                c_e_row = c3_e
+
+            for col in range(3):
+                if col == 0:
+                    b_e_col = b1_e
+                    c_e_col = c1_e
+                elif col == 1:
+                    b_e_col = b2_e
+                    c_e_col = c2_e
+                elif col == 2:
+                    b_e_col = b3_e
+                    c_e_col = c3_e
+
+                K_row_col = (alpha * b_e_row * b_e_col + alpha * c_e_row * c_e_col) / (
+                    4 * area_e
+                )
+                n_row_e = int(connectivity_array[e, row + 2] - 1)  # global row index
+                n_col_e = int(connectivity_array[e, col + 2] - 1)
+
+                # K_gpu[int(n_row_e - 1), int(n_col_e - 1)] += K_row_col
+                K_rows[index] = n_row_e
+                K_cols[index] = n_col_e
+                K_data[index] = K_row_col
+
+                # update the index counter
+                index += 1
+
+                # if e == 0:
+                #     print(int(n_row_e - 1), int(n_col_e - 1), K_row_col)
+
+        cuda.syncthreads()
+
+        # Update the global b vector
+        for row in range(3):
+            if magnetization == 0:
+                b_local = 0
+            else:
+                if row == 0:
+                    c_e = c1_e
+                elif row == 1:
+                    c_e = c2_e
+                elif row == 2:
+                    c_e = c3_e
+
+                b_local = (magnetization / (2.0)) * (c_e) * (4 * np.pi * 1e-7) * alpha
+            n_row_e = int(connectivity_array[e, row + 2])
+            # b_gpu[int(n_row_e - 1)] += b_local
+            cuda.atomic.add(b_gpu, int(n_row_e - 1), b_local)
+
+        cuda.syncthreads()
 
 
 @njit
@@ -209,8 +328,8 @@ if __name__ == "__main__":
     l2 = 20
     d1 = 30
     d2 = 30
-    lc = 8
-    lc1 = 0.5
+    lc = 5
+    lc1 = 1
     mu_r_mag = 1.04
     magnetization = 1e6
 
@@ -239,6 +358,9 @@ if __name__ == "__main__":
 
         numNodes = len(nodeTags)
         numElems = len(elemTags)
+        print("Nodes : ", numNodes)
+        print("Elems : ", numElems)
+        # exit()
 
         # Create the connectivity array
         t0_mesh_prop = time.perf_counter()
@@ -256,16 +378,68 @@ if __name__ == "__main__":
 
         """Assemble K and b"""
         t0_sys = time.perf_counter()
+
+        # CPU implementation of Kx = b
+        print("CPU")
         K = np.zeros((numNodes, numNodes))
         b = np.zeros(numNodes)
-        K, b = assemble_K_and_b_standard(
+        K_np, b_np = assemble_K_and_b_standard(
             K,
             b,
             connectivity_array,
             xyz_nodeCoords,
             numElems,
         )
+
+        # GPU implementation of Kx = b
+        print("\nGPU")
+        K_rows = np.zeros(numElems * 9)
+        K_cols = np.zeros(numElems * 9)
+        K_data = np.zeros(numElems * 9)
+        # K = np.zeros((numNodes, numNodes))
+        b = np.zeros(numNodes)
+        # K_gpu = cuda.to_device(K)
+        K_rows_gpu = cuda.to_device(K_rows)
+        K_cols_gpu = cuda.to_device(K_cols)
+        K_data_gpu = cuda.to_device(K_data)
+
+        b_gpu = cuda.to_device(b)
+        connectivity_array_gpu = cuda.to_device(connectivity_array)
+        xyz_nodeCoords_gpu = cuda.to_device(xyz_nodeCoords)
+
+        # Define kernel executino parameters
+        threadsperblock = 32
+        blockspergrid = (numNodes + (threadsperblock - 1)) // threadsperblock
+
+        _assemble_K_and_b[blockspergrid, threadsperblock](
+            K_rows_gpu,
+            K_cols_gpu,
+            K_data_gpu,
+            b_gpu,
+            connectivity_array_gpu,
+            xyz_nodeCoords_gpu,
+        )
+
+        # # Send back the matrix from GPU to CPU
+        K_rows = K_rows_gpu.copy_to_host()
+        K_cols = K_cols_gpu.copy_to_host()
+        K_data = K_data_gpu.copy_to_host()
+
+        # print(K_cols)
+
+        K_cp = sparse.coo_matrix(
+            (K_data, (K_rows, K_cols)), shape=(numNodes, numNodes)
+        ).toarray()
+
+        b_cp = b_gpu.copy_to_host()
+
+        # cuda.synchronize()
+
         tf_sys = time.perf_counter()
+
+        print("K close? ", np.allclose(K_cp, K_np))
+        print("b close? ", np.allclose(b_cp, b_np))
+        exit()
 
         """Get nodes on edge of the boundary"""
         t0_getBC = time.perf_counter()
@@ -279,46 +453,81 @@ if __name__ == "__main__":
 
         """Solve System of Equation"""
         t0_solve = time.perf_counter()
+
+        """ Numpy solve """
         x = np.linalg.solve(K, b)
+
+        """ Scipy solve gmres """
+        # K_csc = sparse.csc_array(K)
+        # ilu = sparse.linalg.spilu(K_csc)
+        # Mx = lambda x: ilu.solve(x)
+        # M = sparse.linalg.LinearOperator((len(b), len(b)), Mx)
+        # x, info = sparse.linalg.gmres(
+        #     A=K_csc,
+        #     b=b,
+        #     M=M,
+        #     rtol=1e-10,
+        #     maxiter=200,
+        # )
+        # if info == 1:
+        #     raise ValueError("gmres failed to converge in 200 iterations")
+
+        """ Torch """
+        # x = torch.linalg.solve(torch.from_numpy(K), torch.from_numpy(b))
+
+        """Solve system of equation using cupy"""
+        # K_gpu = cp.asarray(K)  # send K_global to gpu
+        # b_gpu = cp.asarray(b)  # send F_global to gpu
+        # soln_gpu = cp.linalg.solve(K_gpu, b_gpu)  # solve using cupy kernel
+        # # send back the GPU solution to the CPU
+        # x = cp.asnumpy(soln_gpu)
+
+        """Solve system of equations using cupyx spsolve"""
+        # K_gpu = cp.asarray(K)  # send K_global to gpu
+        # K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csc matrix
+        # b_gpu = cp.asarray(b)  # send F_global to gpu
+        # soln = cpssl.spsolve(K_csc_gpu, b_gpu)  # solve using spsolve
+        # x = soln.get()  # send soln back to host
+
         tf_solve = time.perf_counter()
 
         """Plot solution field"""
-        # contour_mpl(xyz_nodeCoords, x)
+        contour_mpl(xyz_nodeCoords, x, flag=True)
         # plt.show()
-        # exit()
+        exit()
 
-        # Save times to list
-        time_gmsh = tf_mesh - t0_mesh
-        time_mesh_prop = tf_mesh_prop - t0_mesh_prop
-        time_sys = tf_sys - t0_sys
-        time_getBC = tf_getBC - t0_getBC
-        time_applyBC = tf_applyBC - t0_applyBC
-        time_solve = tf_solve - t0_solve
+        # # Save times to list
+        # time_gmsh = tf_mesh - t0_mesh
+        # time_mesh_prop = tf_mesh_prop - t0_mesh_prop
+        # time_sys = tf_sys - t0_sys
+        # time_getBC = tf_getBC - t0_getBC
+        # time_applyBC = tf_applyBC - t0_applyBC
+        # time_solve = tf_solve - t0_solve
 
-        mesh_time_arr.append(time_gmsh)
-        prop_time_arr.append(time_mesh_prop)
-        sys_time_arr.append(time_sys)
-        getBC_time_arr.append(time_getBC)
-        applyBC_time_arr.append(time_applyBC)
-        solve_time_arr.append(time_solve)
+        # mesh_time_arr.append(time_gmsh)
+        # prop_time_arr.append(time_mesh_prop)
+        # sys_time_arr.append(time_sys)
+        # getBC_time_arr.append(time_getBC)
+        # applyBC_time_arr.append(time_applyBC)
+        # solve_time_arr.append(time_solve)
 
     tf = time.time()
 
     print(f"Total Number of Nodes : {len(nodeTags)}")
     print(f"Total Number of Elements : {len(elemTags)}")
     print(f"Total Time = {tf-t0:.4f} s")
-    headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
-    table = [
-        ["GMSH"] + mesh_time_arr,
-        ["Mesh Prop."] + prop_time_arr,
-        ["Kx = b"] + sys_time_arr,
-        ["Get BCs Nodes"] + getBC_time_arr,
-        ["Apply BC"] + applyBC_time_arr,
-        ["Solve Time"] + solve_time_arr,
-    ]
+    # headers = ["Iteration", "1", "2", "3", "4", "5", "6"]
+    # table = [
+    #     ["GMSH"] + mesh_time_arr,
+    #     ["Mesh Prop."] + prop_time_arr,
+    #     ["Kx = b"] + sys_time_arr,
+    #     ["Get BCs Nodes"] + getBC_time_arr,
+    #     ["Apply BC"] + applyBC_time_arr,
+    #     ["Solve Time"] + solve_time_arr,
+    # ]
 
-    console = Console()
-    console.print(
-        tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
-        style="bold yellow",
-    )
+    # console = Console()
+    # console.print(
+    #     tabulate(table, headers, tablefmt="fancy_outline", floatfmt="3e"),
+    #     style="bold yellow",
+    # )
