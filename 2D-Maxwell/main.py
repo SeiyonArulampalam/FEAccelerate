@@ -13,8 +13,9 @@ import cupy as cp
 import torch
 import cupyx.scipy.sparse.linalg as cpssl
 from cupyx.scipy.sparse import csr_matrix, csc_matrix, coo_matrix
+import json
 
-processor = "cpu"
+processor = "gpu"
 
 
 # Start timer
@@ -40,7 +41,7 @@ applyBC_time_arr = []
 solve_time_arr = []
 x_solns = []
 
-for i in range(6):
+for i in range(7):
     """Generate the mesh using GMSH """
     t0_mesh = time.perf_counter()
     nodeTags, xyz_nodeCoords, elemTags, elemNodeTags = geometry.create_mesh(
@@ -160,14 +161,14 @@ for i in range(6):
         x = soln_gpu.get()  # send soln back to host
     
     """Plot solution field"""
-    assembly.contour_mpl(xyz_nodeCoords, 
-                x, 
-                test_type = processor, 
-                title = processor + f" {i}", 
-                fname = processor+".jpg", 
-                flag=True,)
+    # assembly.contour_mpl(xyz_nodeCoords, 
+    #             x, 
+    #             test_type = processor, 
+    #             title = processor + f" {i}", 
+    #             fname = processor+".jpg", 
+    #             flag=True,)
     # plt.show()
-    exit()
+    # exit()
         
     """Save times to list"""
     time_gmsh = tf_mesh - t0_mesh
@@ -183,7 +184,7 @@ for i in range(6):
     getBC_time_arr.append(time_getBC)
     applyBC_time_arr.append(time_applyBC)
     solve_time_arr.append(time_solve)
-    x_solns.append(x)
+    x_solns.append(x.tolist())
 
 # Stop timer
 tf = time.time()
@@ -212,5 +213,9 @@ console.print(
     ),
     style="grey74",
 )
+
+# store solution array as a json file
+with open(processor+".json", "w") as f:
+    json.dump(x_solns, f)
 
 # print(np.allclose(x[0], x[-1]))
