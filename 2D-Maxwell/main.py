@@ -27,8 +27,8 @@ l1 = 20
 l2 = 20
 d1 = 30
 d2 = 30
-lc = 50
-lc1 = 10
+lc = 0.5
+lc1 = 5
 mu_r_mag = 1.04
 magnetization = 1e6
 
@@ -38,6 +38,7 @@ sys_time_arr = []
 getBC_time_arr = []
 applyBC_time_arr = []
 solve_time_arr = []
+x_solns = []
 
 for i in range(6):
     """Generate the mesh using GMSH """
@@ -119,8 +120,8 @@ for i in range(6):
 
         # Define kernel executino parameters
         threadsperblock = 32
-        blockspergrid = (numNodes + (threadsperblock - 1)) // threadsperblock
-
+        blockspergrid = (numElems + (threadsperblock - 1)) // threadsperblock
+        
         t0_sys = time.perf_counter()
         assembly._assemble_K_and_b[blockspergrid, threadsperblock](
             K_rows_gpu,
@@ -142,7 +143,7 @@ for i in range(6):
         """GPU implementation of applying the BC"""
         nodes_BC_gpu = cuda.to_device(nodes_BC)
         
-        # Define kernel executino parameters
+        # Define kernel execution parameters
         threadsperblock = 1
         blockspergrid = (len(nodes_BC) + (threadsperblock - 1)) // threadsperblock
         
@@ -154,9 +155,9 @@ for i in range(6):
         K_sparse_gpu = csr_matrix(K_coo_gpu)  # convert K to a csr matrix
         b_gpu = cp.asarray(b_gpu)  # send F_global to gpu
         t0_solve = time.perf_counter() # start timer 
-        soln = cpssl.spsolve(K_sparse_gpu, b_gpu)  # solve using spsolve
+        soln_gpu = cpssl.spsolve(K_sparse_gpu, b_gpu)  # solve using spsolve
         tf_solve = time.perf_counter() # stop timer
-        x = soln.get()  # send soln back to host
+        x = soln_gpu.get()  # send soln back to host
     
     """Plot solution field"""
     assembly.contour_mpl(xyz_nodeCoords, 
@@ -182,6 +183,7 @@ for i in range(6):
     getBC_time_arr.append(time_getBC)
     applyBC_time_arr.append(time_applyBC)
     solve_time_arr.append(time_solve)
+    x_solns.append(x)
 
 # Stop timer
 tf = time.time()
@@ -210,3 +212,5 @@ console.print(
     ),
     style="grey74",
 )
+
+# print(np.allclose(x[0], x[-1]))

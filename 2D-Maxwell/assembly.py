@@ -53,7 +53,7 @@ def contour_mpl(xyz_nodeCoords, z, test_type, title="fig", fname="contour.jpg", 
     # Defin colormap
     # cmap = cmasher.guppy_r
     if test_type == "cpu":
-        cmap = "coolwarm"
+        cmap = "jet"
     
     elif test_type == "gpu":
         cmap = "jet"
@@ -61,7 +61,7 @@ def contour_mpl(xyz_nodeCoords, z, test_type, title="fig", fname="contour.jpg", 
     # Plot solution
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
     # plot = ax.tricontour(tri_refi, z_refi, levels=levels, cmap=cmap)
-    plot = ax.tricontour(tri, z, levels=levels, cmap=cmap)
+    # plot = ax.tricontour(tri, z, levels=levels, cmap=cmap)
     plot = ax.tricontourf(tri, z, levels=levels, cmap=cmap)
     # ax.set_aspect("equal", adjustable="box")
     ax.set_title(title, fontsize=10)
