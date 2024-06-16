@@ -11,12 +11,12 @@ from rich.console import Console
 import cupy as cp
 import torch
 import cupyx.scipy.sparse.linalg as cpssl
-from cupyx.scipy.sparse import csr_matrix, csc_matrix
+from cupyx.scipy.sparse import csr_matrix, csc_matrix, coo_matrix
 
 np.set_printoptions(precision=4, linewidth=800)
 
 
-def contour_mpl(xyz_nodeCoords, z, title="fig", fname="contour.jpg", flag=False):
+def contour_mpl(xyz_nodeCoords, z, test_type, title="fig", fname="contour.jpg", flag=False):
     """
     Create a contour plot of the solution.
     Inputs:
@@ -52,8 +52,11 @@ def contour_mpl(xyz_nodeCoords, z, title="fig", fname="contour.jpg", flag=False)
 
     # Defin colormap
     # cmap = cmasher.guppy_r
-    cmap = "coolwarm"
-    cmap = "jet"
+    if test_type == "cpu":
+        cmap = "coolwarm"
+    
+    elif test_type == "gpu":
+        cmap = "jet"
 
     # Plot solution
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
@@ -316,11 +319,36 @@ def applyDirichletBC(nodes_BC, K, b):
                 K[j, nd_i] = 0.0
     return K, b
 
+@cuda.jit
+def _applyDirichletBC(K_gpu, b_gpu, nodes_BC_gpu):
+    
+    # get the thread Id
+    idx = cuda.blockIdx.x * cuda.blockDim.x + cuda.threadIdx.x
+
+    # get the stride length (cuda.blockIdx.x * cuda.gridDim.x)
+    stride = cuda.blockDim.x * cuda.gridDim.x  # cuda.grid_size(1)
+
+    for i in range(idx, nodes_BC_gpu.shape[0], stride):
+        nd_i = int(nodes_BC_gpu[i]-1)
+        for j in range(b_gpu.shape[0]):
+            if nd_i == j:
+                K_gpu[j, j] = 1.0
+                b_gpu[j] = 0.0
+            else:
+                cuda.atomic.add(b_gpu, j, -K_gpu[j, nd_i]*0.0)
+                K_gpu[nd_i, j] = 0.0
+                K_gpu[j, nd_i] = 0.0
+        cuda.syncthreads()  
+    cuda.syncthreads()
+
 
 if __name__ == "__main__":
     # Set FEA settings
-    assembly = "cpu"
-    solver = "numpy-solve"
+    assembly = "gpu"
+    solver = "cupyx-spsolve"
+    
+    # assembly = "cpu"
+    # solver = "scipy-gmres"
     
     # Print Model Settings Out
     print(assembly, "\n")
@@ -335,8 +363,8 @@ if __name__ == "__main__":
     l2 = 20
     d1 = 30
     d2 = 30
-    lc = 5
-    lc1 = 0.5
+    lc = 10
+    lc1 = 10
     mu_r_mag = 1.04
     magnetization = 1e6
 
@@ -346,9 +374,8 @@ if __name__ == "__main__":
     getBC_time_arr = []
     applyBC_time_arr = []
     solve_time_arr = []
-    for i in range(20):
-        """Generate the mesh and create the connectivity arrays"""
-        # Generate the mesh using GMSH
+    for i in range(6):
+        """Generate the mesh using GMSH """
         t0_mesh = time.perf_counter()
         nodeTags, xyz_nodeCoords, elemTags, elemNodeTags = gm.create_mesh(
             B=B,
@@ -366,7 +393,7 @@ if __name__ == "__main__":
         numNodes = len(nodeTags)
         numElems = len(elemTags)
 
-        # Create the connectivity array
+        """Create the connectivity array"""
         t0_mesh_prop = time.perf_counter()
         connectivity_array = gm.get_mesh_props(
             nodeTags=nodeTags,
@@ -379,6 +406,11 @@ if __name__ == "__main__":
             d2=d2,
         )
         tf_mesh_prop = time.perf_counter()
+
+        """Get nodes on edge of the boundary"""
+        t0_getBC = time.perf_counter()
+        nodes_BC = get_BC_nodes(nodeTags, xyz_nodeCoords, B, H)
+        tf_getBC = time.perf_counter()
 
         """Assemble K and b"""
         if assembly == "cpu":
@@ -395,7 +427,6 @@ if __name__ == "__main__":
             )
             tf_sys = time.perf_counter()
 
-        
         elif assembly == "gpu":
             """GPU implementation of Kx = b"""
             K_rows = np.zeros(numElems * 9)
@@ -428,28 +459,49 @@ if __name__ == "__main__":
             tf_sys = time.perf_counter()
             
             cuda.synchronize()
+            
+            # # Send back the matrix from GPU to CPU
+            # K_rows = K_rows_gpu.copy_to_host()
+            # K_cols = K_cols_gpu.copy_to_host()
+            # K_data = K_data_gpu.copy_to_host()
 
-            # Send back the matrix from GPU to CPU
-            K_rows = K_rows_gpu.copy_to_host()
-            K_cols = K_cols_gpu.copy_to_host()
-            K_data = K_data_gpu.copy_to_host()
+            # # Convert system to sparse matrix format
+            # K_sys = sparse.coo_matrix(
+            #     (K_data, (K_rows, K_cols)),
+            #     shape=(numNodes, numNodes),
+            # ).toarray()
+            # b_sys = b_gpu.copy_to_host()
+            
+            K_data_gpu = cp.array(K_data_gpu)
+            K_rows_gpu = cp.array(K_rows_gpu)
+            K_cols_gpu = cp.array(K_cols_gpu) 
+            K_coo_gpu = coo_matrix((K_data_gpu, (K_rows_gpu, K_cols_gpu)), shape = (numNodes, numNodes)).toarray()
 
-            # Convert system to sparse matrix format
-            K_sys = sparse.coo_matrix(
-                (K_data, (K_rows, K_cols)),
-                shape=(numNodes, numNodes),
-            ).toarray()
-            b_sys = b_gpu.copy_to_host()
-
-        """Get nodes on edge of the boundary"""
-        t0_getBC = time.perf_counter()
-        nodes_BC = get_BC_nodes(nodeTags, xyz_nodeCoords, B, H)
-        tf_getBC = time.perf_counter()
 
         """Apply Dirichlet BC"""
-        t0_applyBC = time.perf_counter()
-        K_sys, b_sys = applyDirichletBC(nodes_BC, K_sys, b_sys)
-        tf_applyBC = time.perf_counter()
+        if assembly == "cpu":
+            t0_applyBC = time.perf_counter()
+            K_sys, b_sys = applyDirichletBC(nodes_BC, K_sys, b_sys)
+            tf_applyBC = time.perf_counter()
+        
+        elif assembly == "gpu":
+            nodes_BC_gpu = cuda.to_device(nodes_BC)
+            
+            # Define kernel executino parameters
+            threadsperblock = 1
+            blockspergrid = (len(nodes_BC) + (threadsperblock - 1)) // threadsperblock
+            
+            t0_applyBC = time.perf_counter()
+            _applyDirichletBC[blockspergrid, threadsperblock](K_coo_gpu, b_gpu, nodes_BC_gpu)
+            tf_applyBC = time.perf_counter()          
+            
+                        
+            cuda.synchronize()
+            
+            # # send back information to cpu to solve
+            # K_sys = K_coo_gpu.get()
+            
+            # b_sys = b_gpu.copy_to_host()
 
         """Solve System of Equation"""
         t0_solve = time.perf_counter()
@@ -477,28 +529,26 @@ if __name__ == "__main__":
         elif solver == "torch":
             """ Torch """
             x = torch.linalg.solve(torch.from_numpy(K_sys), torch.from_numpy(b_sys))
-            
-        elif solver == "cupy-solve":
-            """Solve system of equation using cupy"""
-            K_gpu = cp.asarray(K_sys)  # send K_global to gpu
-            b_gpu = cp.asarray(b_sys)  # send F_global to gpu
-            soln_gpu = cp.linalg.solve(K_gpu, b_gpu)  # solve using cupy kernel
-            x = cp.asnumpy(soln_gpu) # send soln back to the host
-            
+                        
         elif solver == "cupyx-spsolve":
             """Solve system of equations using cupyx spsolve"""
-            K_gpu = cp.asarray(K_sys)  # send K_global to gpu
-            K_csc_gpu = csr_matrix(K_gpu)  # convert K to a csr matrix
-            b_gpu = cp.asarray(b_sys)  # send F_global to gpu
+            # K_gpu = cp.asarray(K_sys)  # send K_global to gpu
+            K_csc_gpu = csr_matrix(K_coo_gpu)  # convert K to a csr matrix
+            b_gpu = cp.asarray(b_gpu)  # send F_global to gpu
             soln = cpssl.spsolve(K_csc_gpu, b_gpu)  # solve using spsolve
             x = soln.get()  # send soln back to host
 
         tf_solve = time.perf_counter()
 
         """Plot solution field"""
-        # contour_mpl(xyz_nodeCoords, x, title = assembly + f" {i}", fname = assembly+".jpg", flag=True)
+        contour_mpl(xyz_nodeCoords, 
+                    x, 
+                    test_type = assembly, 
+                    title = assembly + f" {i}", 
+                    fname = assembly+".jpg", 
+                    flag=True,)
         # plt.show()
-        # exit()
+        exit()
 
         # Save times to list
         time_gmsh = tf_mesh - t0_mesh
