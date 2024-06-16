@@ -155,7 +155,7 @@ def assemble_K_and_b_standard(K, b, connectivity_array, xyz_nodeCoords, numElems
 
         # Update the global b vector
         for row in range(3):
-            if magnetization == 0:
+            if magnetization_x == 0:
                 b_local = 0
             else:
                 b_local = (
@@ -344,11 +344,11 @@ def _applyDirichletBC(K_gpu, b_gpu, nodes_BC_gpu):
 
 if __name__ == "__main__":
     # Set FEA settings
-    assembly = "gpu"
-    solver = "cupyx-spsolve"
+    # assembly = "gpu"
+    # solver = "cupyx-spsolve"
     
-    # assembly = "cpu"
-    # solver = "scipy-gmres"
+    assembly = "cpu"
+    solver = "scipy-gmres"
     
     # Print Model Settings Out
     print(assembly, "\n")
