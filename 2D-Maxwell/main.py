@@ -16,6 +16,7 @@ from cupyx.scipy.sparse import csr_matrix, csc_matrix, coo_matrix
 import json
 
 processor = "gpu"
+gpu_solver = "spsolve" # "cgs", "spsolve"
 
 
 # Start timer
@@ -41,7 +42,7 @@ applyBC_time_arr = []
 solve_time_arr = []
 x_solns = []
 
-for i in range(7):
+for i in range(10):
     """Generate the mesh using GMSH """
     t0_mesh = time.perf_counter()
     nodeTags, xyz_nodeCoords, elemTags, elemNodeTags = geometry.create_mesh(
@@ -151,14 +152,26 @@ for i in range(7):
         t0_applyBC = time.perf_counter()
         assembly._applyDirichletBC[blockspergrid, threadsperblock](K_coo_gpu, b_gpu, nodes_BC_gpu)
         tf_applyBC = time.perf_counter()  
-    
-        """Solve the system of equations on the GPU"""
-        K_sparse_gpu = csr_matrix(K_coo_gpu)  # convert K to a csr matrix
-        b_gpu = cp.asarray(b_gpu)  # send F_global to gpu
-        t0_solve = time.perf_counter() # start timer 
-        soln_gpu = cpssl.spsolve(K_sparse_gpu, b_gpu)  # solve using spsolve
-        tf_solve = time.perf_counter() # stop timer
-        x = soln_gpu.get()  # send soln back to host
+        
+        if gpu_solver == "spsolve": 
+            """Solve the system of equations on the GPU"""
+            K_sparse_gpu = csr_matrix(K_coo_gpu)  # convert K to a csr matrix
+            b_gpu = cp.asarray(b_gpu)  # send F_global to gpu
+            t0_solve = time.perf_counter() # start timer 
+            soln_gpu = cpssl.spsolve(K_sparse_gpu, b_gpu)  # solve using spsolve
+            tf_solve = time.perf_counter() # stop timer
+            x = soln_gpu.get()  # send soln back to host
+
+        elif gpu_solver == "cgs":
+            """Solve system using an iterative solver"""
+            K_sparse_gpu = csr_matrix(K_coo_gpu)
+            b_gpu = cp.asarray(b_gpu)
+            K_iLU = cpssl.spilu(K_sparse_gpu)
+            M = cpssl.LinearOperator((len(b_gpu), len(b_gpu)), K_iLU.solve)
+            t0_solve = time.perf_counter() # start timer 
+            soln_gpu, info =cpssl.cgs(K_sparse_gpu, b_gpu, M=M)
+            tf_solve = time.perf_counter() # stop timer
+            x = soln_gpu.get()
     
     """Plot solution field"""
     # assembly.contour_mpl(xyz_nodeCoords, 
