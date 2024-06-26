@@ -10,13 +10,13 @@ import matplotlib.tri as mtri
 import matplotlib as mpl
 from rich.console import Console
 import cupy as cp
-import torch
+# import torch
 import cupyx.scipy.sparse.linalg as cpssl
 from cupyx.scipy.sparse import csr_matrix, csc_matrix, coo_matrix
 import json
 
 processor = "gpu"
-
+dump = False
 
 # Start timer
 t0 = time.time()
@@ -214,8 +214,9 @@ console.print(
     style="grey74",
 )
 
-# store solution array as a json file
-with open(processor+".json", "w") as f:
-    json.dump(x_solns, f)
+if dump == True:
+    # store solution array as a json file
+    with open(processor+".json", "w") as f:
+        json.dump(x_solns, f)
 
 # print(np.allclose(x[0], x[-1]))
