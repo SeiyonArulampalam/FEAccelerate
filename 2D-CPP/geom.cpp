@@ -5,6 +5,12 @@
 
 using namespace std;
 
+/*
+Remove the z collumn in vectors becuase it is always zero... we can save memeory
+spaces
+
+*/
+
 vector<double> assembleNodeMap(vector<size_t> nodeTags,
                                vector<double> nodeCoords) {
   // Initialize the size of the vector
@@ -27,26 +33,52 @@ vector<double> assembleNodeMap(vector<size_t> nodeTags,
 }
 
 vector<int> assembleConnectivityVector(vector<size_t> elemTags,
-                                       vector<size_t> elemNodeTags) {
+                                       vector<size_t> elemNodeTags,
+                                       vector<double> nodeCoords) {
   vector<int> connecVec(elemTags.size() * 4);  // init size of connecVec
 
   printf("\nElement Tag : GMSH Tag | n1 | n2 | n3\n");
   for (int i = 0; i < elemTags.size(); i++) {
-    // Loop through each element tag
+    // Loop through each element tag. Subtract 1 for 0-indexing.
     int gmsh_tag = elemTags[i];
-    int n1 = elemNodeTags[i * 3];      // node 1
-    int n2 = elemNodeTags[i * 3 + 1];  // node 2
-    int n3 = elemNodeTags[i * 3 + 2];  // node 3
+    int n1 = elemNodeTags[i * 3] - 1;      // node 1
+    int n2 = elemNodeTags[i * 3 + 1] - 1;  // node 2
+    int n3 = elemNodeTags[i * 3 + 2] - 1;  // node 3
 
     // Compute area of element. If the area is negative swap 1st and 3rd nodes
+    double n1_x = nodeCoords[n1 * 3];
+    double n1_y = nodeCoords[n1 * 3 + 1];
 
-    // Updated the connecVec
-    connecVec[4 * i] = gmsh_tag;
-    connecVec[4 * i + 1] = n1;
-    connecVec[4 * i + 2] = n2;
-    connecVec[4 * i + 3] = n3;
+    double n2_x = nodeCoords[n2 * 3];
+    double n2_y = nodeCoords[n2 * 3 + 1];
 
-    printf("Element [%i] : [%i] [%i, %i, %i]\n", i, gmsh_tag, n1, n2, n3);
+    double n3_x = nodeCoords[n3 * 3];
+    double n3_y = nodeCoords[n3 * 3 + 1];
+
+    double a_e = 0.5 * (n1_x * (n2_y - n3_y) + n2_x * (n3_y - n1_y) +
+                        n3_x * (n1_y - n2_y));
+
+    // printf("Area of Element %i = %f\n", i, a_e);
+    // printf("n1 %i = [%f, %f]\n", n1, n1_x, n1_y);
+    // printf("n2 %i = [%f, %f]\n", n2, n2_x, n2_y);
+    // printf("n3 %i = [%f, %f]\n", n3, n3_x, n3_y);
+
+    if (a_e < 0.0) {
+      connecVec[4 * i] = gmsh_tag;
+      connecVec[4 * i + 1] = n3;
+      connecVec[4 * i + 2] = n2;
+      connecVec[4 * i + 3] = n1;
+      // printf("Element [%i] : [%i] [%i, %i, %i] (swapped)\n", i, gmsh_tag, n3,
+             n2, n1);
+    }
+
+    else {
+      connecVec[4 * i] = gmsh_tag;
+      connecVec[4 * i + 1] = n1;
+      connecVec[4 * i + 2] = n2;
+      connecVec[4 * i + 3] = n3;
+      // printf("Element [%i] : [%i] [%i, %i, %i]\n", i, gmsh_tag, n1, n2, n3);
+    }
   }
 
   return connecVec;
@@ -116,7 +148,7 @@ int main(int argc, char **argv) {
 
   // Create the connectivity vector
   vector<int> connecVec;
-  connecVec = assembleConnectivityVector(elemTags, elemNodeTags);
+  connecVec = assembleConnectivityVector(elemTags, elemNodeTags, nodeCoords);
   // for (auto it : connecVec) cout << it << " ";
 
   // Must finalize the model at the end of the call
