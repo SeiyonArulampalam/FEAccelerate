@@ -3,6 +3,55 @@
 #include <iostream>
 #include <set>
 
+using namespace std;
+
+vector<double> assembleNodeMap(vector<size_t> nodeTags,
+                               vector<double> nodeCoords) {
+  // Initialize the size of the vector
+  vector<double> nodeMapVec(nodeTags.size() * 4);
+
+  printf("\nNode Tag | [x, y, z]\n");
+  for (int i = 0; i < nodeTags.size(); i++) {
+    double x_i = nodeCoords[i * 3];
+    double y_i = nodeCoords[i * 3 + 1];
+    double z_i = nodeCoords[i * 3 + 2];
+    printf("Node [%i] : [%f, %f, %f]\n", i, x_i, y_i, z_i);
+
+    // Updated the vector that will be returned
+    nodeMapVec[4 * i] = i;        // Node tag
+    nodeMapVec[4 * i + 1] = x_i;  // x coord
+    nodeMapVec[4 * i + 2] = y_i;  // y coord
+    nodeMapVec[4 * i + 3] = z_i;  // z coord
+  }
+  return nodeMapVec;
+}
+
+vector<int> assembleConnectivityVector(vector<size_t> elemTags,
+                                       vector<size_t> elemNodeTags) {
+  vector<int> connecVec(elemTags.size() * 4);  // init size of connecVec
+
+  printf("\nElement Tag : GMSH Tag | n1 | n2 | n3\n");
+  for (int i = 0; i < elemTags.size(); i++) {
+    // Loop through each element tag
+    int gmsh_tag = elemTags[i];
+    int n1 = elemNodeTags[i * 3];      // node 1
+    int n2 = elemNodeTags[i * 3 + 1];  // node 2
+    int n3 = elemNodeTags[i * 3 + 2];  // node 3
+
+    // Compute area of element. If the area is negative swap 1st and 3rd nodes
+
+    // Updated the connecVec
+    connecVec[4 * i] = gmsh_tag;
+    connecVec[4 * i + 1] = n1;
+    connecVec[4 * i + 2] = n2;
+    connecVec[4 * i + 3] = n3;
+
+    printf("Element [%i] : [%i] [%i, %i, %i]\n", i, gmsh_tag, n1, n2, n3);
+  }
+
+  return connecVec;
+}
+
 int main(int argc, char **argv) {
   bool flag = false;  // Define the flag for visualizing the mesh;
 
@@ -35,7 +84,7 @@ int main(int argc, char **argv) {
   // Generate 2D mesh
   gmsh::model::mesh::generate(2);
   if (flag == true) {
-    std::set<std::string> args(argv, argv + argc);
+    set<string> args(argv, argv + argc);
     if (!args.count("-nopopup")) gmsh::fltk::run();
   }
 
@@ -43,44 +92,32 @@ int main(int argc, char **argv) {
   gmsh::write("model.msh");
 
   // Extract the nodes for the mesh
-  std::vector<std::size_t> nodeTags;
-  std::vector<double> nodeCoords, nodeParams;
+  vector<size_t> nodeTags;
+  vector<double> nodeCoords, nodeParams;
   gmsh::model::mesh::getNodes(nodeTags, nodeCoords, nodeParams, -1, -1);
   printf("Total Number of Nodes = %lu\n", nodeTags.size());
 
   // Get the types of elements in the mesh
-  std::vector<int> elementTypes;
+  vector<int> elementTypes;
   gmsh::model::mesh::getElementTypes(elementTypes);
 
   // Interested in extracting the triangle element type
   int elementType = elementTypes[1];
 
   // Extract the elemTags and elemNodesTags for linear triangular element
-  std::vector<std::size_t> elemTags, elemNodeTags;
+  vector<size_t> elemTags, elemNodeTags;
   gmsh::model::mesh::getElementsByType(elementType, elemTags, elemNodeTags);
   printf("Total Number of Elements = %lu\n", elemTags.size());
 
-  // Print mapping of node tag to xyz coordinate
-  printf("\nNode Tag | [x, y, z]\n");
-  for (int tag = 0; tag < nodeTags.size(); tag++) {
-    double x_i = nodeCoords[tag * 3];
-    double y_i = nodeCoords[tag * 3 + 1];
-    double z_i = nodeCoords[tag * 3 + 2];
-    printf("Node [%i] : [%f, %f, %f]\n", tag, x_i, y_i, z_i);
-  }
+  // Vector that maps node to xyz coordinates
+  vector<double> nodeMapVec;
+  nodeMapVec = assembleNodeMap(nodeTags, nodeCoords);
+  // for (auto it : nodeMapVec) cout << it << " ";
 
-  // Create the connectivty array (we will work with a single 1d vector)
-  // Size of the vector = number of elemenets x 5
-  printf("\nElement Tag | GMSH Tag | n1 | n2 | n3\n");
-  for (int i = 0; i < elemTags.size(); i++) {
-    // Loop through each element tag
-    int gmsh_tag = elemTags[i];
-    int n1 = elemNodeTags[i * 3];      // node 1
-    int n2 = elemNodeTags[i * 3 + 1];  // node 2
-    int n3 = elemNodeTags[i * 3 + 2];  // node 3
-
-    printf("Element [%i] : [%i] [%i, %i, %i]\n", i, gmsh_tag, n1, n2, n3);
-  }
+  // Create the connectivity vector
+  vector<int> connecVec;
+  connecVec = assembleConnectivityVector(elemTags, elemNodeTags);
+  // for (auto it : connecVec) cout << it << " ";
 
   // Must finalize the model at the end of the call
   gmsh::finalize();
