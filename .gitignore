@@ -4,3 +4,7 @@
 *.json
 __pycache__/
 *.png
+*.json
+CMakeFiles/
+.cmake/
+*.msh
