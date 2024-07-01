@@ -69,7 +69,7 @@ vector<int> assembleConnectivityVector(vector<size_t> elemTags,
       connecVec[4 * i + 2] = n2;
       connecVec[4 * i + 3] = n1;
       // printf("Element [%i] : [%i] [%i, %i, %i] (swapped)\n", i, gmsh_tag, n3,
-             n2, n1);
+      //        n2, n1);
     }
 
     else {
