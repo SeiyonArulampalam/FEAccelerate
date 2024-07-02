@@ -57,18 +57,18 @@ vector<int> assembleConnectivityVector(vector<size_t> elemTags,
     double a_e = 0.5 * (n1_x * (n2_y - n3_y) + n2_x * (n3_y - n1_y) +
                         n3_x * (n1_y - n2_y));
 
-    // printf("Area of Element %i = %f\n", i, a_e);
-    // printf("n1 %i = [%f, %f]\n", n1, n1_x, n1_y);
-    // printf("n2 %i = [%f, %f]\n", n2, n2_x, n2_y);
-    // printf("n3 %i = [%f, %f]\n", n3, n3_x, n3_y);
+    printf("Area of Element %i = %f\n", i, a_e);
+    printf("n1 %i = [%f, %f]\n", n1, n1_x, n1_y);
+    printf("n2 %i = [%f, %f]\n", n2, n2_x, n2_y);
+    printf("n3 %i = [%f, %f]\n", n3, n3_x, n3_y);
 
     if (a_e < 0.0) {
       connecVec[4 * i] = gmsh_tag;
       connecVec[4 * i + 1] = n3;
       connecVec[4 * i + 2] = n2;
       connecVec[4 * i + 3] = n1;
-      // printf("Element [%i] : [%i] [%i, %i, %i] (swapped)\n", i, gmsh_tag, n3,
-      //        n2, n1);
+      printf("Element [%i] : [%i] [%i, %i, %i] (swapped)\n", i, gmsh_tag, n3,
+             n2, n1);
     }
 
     else {
@@ -76,7 +76,7 @@ vector<int> assembleConnectivityVector(vector<size_t> elemTags,
       connecVec[4 * i + 1] = n1;
       connecVec[4 * i + 2] = n2;
       connecVec[4 * i + 3] = n3;
-      // printf("Element [%i] : [%i] [%i, %i, %i]\n", i, gmsh_tag, n1, n2, n3);
+      printf("Element [%i] : [%i] [%i, %i, %i]\n", i, gmsh_tag, n1, n2, n3);
     }
   }
 
@@ -167,5 +167,6 @@ int main(int argc, char **argv) {
 
   // Must finalize the model at the end of the call
   gmsh::finalize();
+
   return 0;
 }
