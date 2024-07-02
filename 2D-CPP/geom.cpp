@@ -8,7 +8,6 @@ using namespace std;
 /*
 Remove the z collumn in vectors becuase it is always zero... we can save memeory
 spaces
-
 */
 
 vector<double> assembleNodeMap(vector<size_t> nodeTags,
@@ -84,10 +83,11 @@ vector<int> assembleConnectivityVector(vector<size_t> elemTags,
   return connecVec;
 }
 
-int main(int argc, char **argv) {
-  bool flag = false;  // Define the flag for visualizing the mesh;
-
-  gmsh::initialize();                              // initialize gmsh
+void generateMesh() {
+  /*
+  Function generates the mesh file for the analysis.
+  */
+  gmsh::initialize();                              // Initialize gmsh
   gmsh::option::setNumber("General.Terminal", 0);  // 0 = No print, 1 = Print
   gmsh::model::add("model");                       // Specify the model
 
@@ -115,13 +115,27 @@ int main(int argc, char **argv) {
 
   // Generate 2D mesh
   gmsh::model::mesh::generate(2);
+
+  // Save the mesh
+  gmsh::write("mesh.msh");
+
+  gmsh::finalize();  // finalize gmsh script
+}
+
+int main(int argc, char **argv) {
+  bool flag = false;  // Define the flag for visualizing the mesh;
+
+  generateMesh();  // Generate the .msh file
+
+  gmsh::initialize();
+  gmsh::open("mesh.msh");  // Open the mesh
+
+  // Generate 2D mesh
+  gmsh::model::mesh::generate(2);
   if (flag == true) {
     set<string> args(argv, argv + argc);
     if (!args.count("-nopopup")) gmsh::fltk::run();
   }
-
-  // Save the mesh
-  gmsh::write("model.msh");
 
   // Extract the nodes for the mesh
   vector<size_t> nodeTags;
